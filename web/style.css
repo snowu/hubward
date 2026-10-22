@@ -1462,7 +1462,8 @@ body[data-section="bikes"] #bikes > .stop { border-radius: 8px; }
 #tracking-edit-dialog .tracking-choice button { min-width: 0; flex: 1 1 0; padding-inline: 0; }
 .tracking-choice button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .tracking-hours { display: flex; gap: 0.75rem; }
-.tracking-hours .field { flex: 1; }
+.tracking-hours .field { flex: 1; min-width: 0; }
+.tracking-hours input { min-width: 0; }
 .tracking-hours[hidden] { display: none; }
 #tracking-edit-error { color: var(--danger); margin: 0; }
 #sheet-arrivals li { flex-wrap: wrap; }
