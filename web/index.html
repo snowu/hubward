@@ -183,6 +183,43 @@
       </form>
     </dialog>
 
+    <dialog id="tracking-edit-dialog" aria-labelledby="tracking-edit-title">
+      <form id="tracking-edit-form" method="dialog">
+        <h2 id="tracking-edit-title">Alert</h2>
+        <p id="tracking-edit-target" class="muted"></p>
+        <div class="field"><span>Only when I am within</span>
+          <div id="tracking-edit-radius" class="segmented tracking-choice" role="group" aria-label="Radius">
+            <button type="button" data-radius="">Anywhere</button>
+            <button type="button" data-radius="500">500 m</button>
+            <button type="button" data-radius="1000">1 km</button>
+            <button type="button" data-radius="2000">2 km</button>
+          </div>
+          <small class="muted">Measured from where you last opened Hubward, in the last 12 hours.</small>
+        </div>
+        <div class="field"><span>Only on these days</span>
+          <div id="tracking-edit-days" class="segmented tracking-choice" role="group" aria-label="Days">
+            <button type="button" data-day="1" aria-pressed="false">Mo</button>
+            <button type="button" data-day="2" aria-pressed="false">Tu</button>
+            <button type="button" data-day="3" aria-pressed="false">We</button>
+            <button type="button" data-day="4" aria-pressed="false">Th</button>
+            <button type="button" data-day="5" aria-pressed="false">Fr</button>
+            <button type="button" data-day="6" aria-pressed="false">Sa</button>
+            <button type="button" data-day="0" aria-pressed="false">Su</button>
+          </div>
+          <small class="muted">No days picked: any time.</small>
+        </div>
+        <div id="tracking-edit-hours" class="tracking-hours">
+          <label class="field"><span>From</span><input id="tracking-edit-from" type="time" required /></label>
+          <label class="field"><span>To</span><input id="tracking-edit-to" type="time" required /></label>
+        </div>
+        <p id="tracking-edit-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="tracking-edit-cancel" type="button">Cancel</button>
+          <button id="tracking-edit-save" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="metrics-dialog" aria-labelledby="metrics-title">
       <div class="account-menu-heading">
         <h2 id="metrics-title">EMT metrics</h2>

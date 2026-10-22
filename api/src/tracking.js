@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { EmtError } from "./errors.js";
 import { sendPush, validateSubscription, subscriptionId } from "./push.js";
-import { bikeTransition, busTransition, notificationText } from "./tracking-rules.js";
+import { bikeTransition, busTransition, notificationText, watchStatus, nextStatusChange, validRadius, validSchedule, DEFAULT_RADIUS } from "./tracking-rules.js";
 import { bikeFeed, stopPoller } from "./pollers.js";
 
 export function validateWatch(input) {
@@ -14,9 +14,37 @@ export function validateWatch(input) {
   const label = typeof input.label === "string" ? input.label.trim().slice(0, 120) : "";
   const watch = { kind: input.kind, targetId: String(input.targetId), label, line: input.kind === "bus" ? line : "", destination: input.kind === "bus" ? destination : "" };
   const coordinates = watchCoordinates(input.coordinates);
-  // Coordinates are not part of the identity: the same stop tracked from a
-  // card that knows where it is and one that does not is one watch.
-  return { ...watch, ...(coordinates ? { coordinates } : {}), id: JSON.stringify([watch.kind, watch.targetId, watch.line, watch.destination]) };
+  // A new watch only counts near its stop unless the page says otherwise.
+  const limits = watchLimits({ radius: DEFAULT_RADIUS, ...input });
+  // Coordinates and limits are not part of the identity: the same stop
+  // tracked from a card that knows where it is and one that does not is one
+  // watch.
+  return { ...watch, ...(coordinates ? { coordinates } : {}), ...limits, id: JSON.stringify([watch.kind, watch.targetId, watch.line, watch.destination]) };
+}
+
+/** The radius and schedule a request asks for, of the keys it sends. */
+export function watchLimits(input) {
+  const limits = {};
+  if ("radius" in input) {
+    limits.radius = validRadius(input.radius);
+    if (limits.radius === undefined) throw new EmtError("bad_request", "Choose a radius of 500 m, 1 km or 2 km");
+  }
+  if ("schedule" in input) {
+    limits.schedule = validSchedule(input.schedule);
+    if (limits.schedule === undefined) throw new EmtError("bad_request", "Choose at least one day and a start and end time");
+  }
+  return limits;
+}
+
+/** Where the phone was when the page last opened, [lon, lat] to ~100 m: the
+ *  radius rule needs no more than that, and the runner keeps only the last. */
+export function validLocation(value) {
+  if (!Array.isArray(value) || value.length !== 2) throw new EmtError("bad_request", "Send coordinates as [lon, lat]");
+  const [lon, lat] = value.map(Number);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) {
+    throw new EmtError("bad_request", "Send coordinates as [lon, lat]");
+  }
+  return [Math.round(lon * 1e3) / 1e3, Math.round(lat * 1e3) / 1e3];
 }
 
 /** GeoJSON [lon, lat] for the notification's directions link, or null.
@@ -42,6 +70,8 @@ async function pushOptions(watch, alert) {
  *  object is evicted, without a write per poll. */
 const LAST_CHECK_WRITE = 10 * 60_000;
 const RESYNC = 24 * 60 * 60_000;
+/** An alarm never lands sooner than this, however close the next edge. */
+const MIN_ALARM = 30_000;
 /** A device is "seen" whenever the page opens on it (it re-registers its push
  *  subscription then). One not seen for DEVICE_PAUSE gets no alerts, and a
  *  user with no device left seen stops their pollers, so a lost phone or a
@@ -53,6 +83,12 @@ export const DEVICE_FORGET = 30 * 86_400_000;
 /** How stale a device's seenAt may get before a check-in rewrites it: every
  *  page load checks in, and most of them need not cost a storage write. */
 const SEEN_WRITE = 6 * 60 * 60_000;
+
+/** What the page shows for a paused watch: why, and when it comes back. */
+function pausedField(status) {
+  if (status.active) return { paused: null };
+  return { paused: { reason: status.reason, ...(status.resumes ? { resumes: status.resumes } : {}), ...(status.metres != null ? { metres: status.metres } : {}) } };
+}
 
 // One object per authenticated user: their watches, their devices, their alert
 // state. It fetches nothing itself. The shared pollers in pollers.js fetch each
@@ -131,10 +167,20 @@ export class TrackingRunner extends DurableObject {
     await this.sync();
   }
 
+  location() { return this.meta("location"); }
+  /** Watches that may poll and alert now: a schedule or radius can pause one. */
+  live(watches, now = Date.now()) {
+    const location = this.location();
+    return watches.filter((watch) => watchStatus(watch, location, now).active);
+  }
+
   async list() {
+    const now = Date.now();
+    const location = this.location();
     return {
       watches: this.rows("watches").map(({ state, revision, delivered, nextCheck, lastAttempt, ...watch }) => ({
         ...watch,
+        ...pausedField(watchStatus(watch, location, now)),
         lastCheck: Math.max(this.checked.get(watch.id) ?? 0, watch.lastCheck ?? 0) || null,
         // Where a rack stands against the alert rule: the last count and
         // whether alerts are armed.
@@ -187,6 +233,27 @@ export class TrackingRunner extends DurableObject {
     return this.list();
   }
 
+  /** Change a watch's radius or schedule. A new revision, so a poll already
+   *  evaluating the old one cannot write it back over this. */
+  async configure(id, input) {
+    const existing = this.watch(id);
+    if (!existing) throw new EmtError("not_found", "That alert is no longer tracked");
+    this.save({ ...existing, ...watchLimits(input), revision: crypto.randomUUID() });
+    await this.sync();
+    return this.list();
+  }
+
+  /** The page says where the phone is. Pollers are only re-told when that
+   *  moves a watch in or out of range. */
+  async setLocation(coordinates) {
+    const now = Date.now();
+    const watches = this.rows("watches");
+    const before = this.live(watches, now).map((w) => w.id).join();
+    this.setMeta("location", { coordinates: validLocation(coordinates), at: now });
+    if (this.live(watches, now).map((w) => w.id).join() !== before) await this.sync();
+    return this.list();
+  }
+
   async remove(id) {
     this.ctx.storage.sql.exec("DELETE FROM watches WHERE id = ?", id);
     await this.sync();
@@ -208,10 +275,17 @@ export class TrackingRunner extends DurableObject {
       else if (now - seenAt >= DEVICE_FORGET) this.ctx.storage.sql.exec("DELETE FROM devices WHERE id = ?", id);
     }
     const watches = this.activeDevices(now).length ? this.rows("watches") : [];
+    const location = this.location();
+    const live = this.live(watches, now);
+    for (const watch of watches) {
+      // A paused watch starts again from a fresh count, not from the one it
+      // stopped at: "3→7" on arriving would report the whole afternoon.
+      if (!live.includes(watch) && Object.keys(watch.state ?? {}).length) this.save({ ...watch, state: {}, delivered: {} });
+    }
     const account = this.emtAccount();
     const wanted = {
-      bikes: [...new Set(watches.filter((w) => w.kind === "bike").map((w) => w.targetId))].sort(),
-      stops: [...new Set(watches.filter((w) => w.kind === "bus").map((w) => w.targetId))].sort(),
+      bikes: [...new Set(live.filter((w) => w.kind === "bike").map((w) => w.targetId))].sort(),
+      stops: [...new Set(live.filter((w) => w.kind === "bus").map((w) => w.targetId))].sort(),
       connection: account?.connectionId ?? null,
     };
     // Only to know which stops to leave; never to skip telling a poller.
@@ -223,10 +297,13 @@ export class TrackingRunner extends DurableObject {
     }
     this.setMeta("subscriptions", wanted);
     // A daily re-sync repairs anything a failed call above left behind, and
-    // is what eventually forgets a paused device.
+    // is what eventually forgets a paused device. A schedule opening or
+    // closing, or a position going stale, brings it forward.
     const alarm = await this.ctx.storage.getAlarm();
     const keep = watches.length > 0 || this.devices().length > 0;
-    if (keep && alarm == null) await this.ctx.storage.setAlarm(Date.now() + RESYNC);
+    const edge = watches.reduce((soonest, watch) => Math.min(soonest, nextStatusChange(watch, location, now)), Infinity);
+    const next = Math.max(now + MIN_ALARM, Math.min(now + RESYNC, edge));
+    if (keep && (alarm == null || alarm > next)) await this.ctx.storage.setAlarm(next);
     if (!keep && alarm != null) await this.ctx.storage.deleteAlarm();
   }
 
@@ -242,7 +319,8 @@ export class TrackingRunner extends DurableObject {
    *  wants bike counts, so the feed can drop runners that went quiet. */
   async onBikes(payload) {
     if (!this.activeDevices().length) return { active: false };
-    const watches = this.rows("watches").filter((w) => w.kind === "bike");
+    // A watch paused since the last sync is skipped; its alarm syncs it out.
+    const watches = this.live(this.rows("watches").filter((w) => w.kind === "bike"));
     await Promise.all(watches.map((watch) => this.evaluate(watch, payload.fetchedAt, () => {
       if (payload.error) throw new Error(payload.error);
       const station = payload.stations?.[watch.targetId];
@@ -256,7 +334,7 @@ export class TrackingRunner extends DurableObject {
   async onBoard(stopId, payload) {
     // The poller drops this runner; the next check-in's sync() comes back.
     if (!this.activeDevices().length) return { active: false };
-    const watches = this.rows("watches").filter((w) => w.kind === "bus" && w.targetId === String(stopId));
+    const watches = this.live(this.rows("watches").filter((w) => w.kind === "bus" && w.targetId === String(stopId)));
     await Promise.all(watches.map((watch) => this.evaluate(watch, payload.fetchedAt, () => {
       if (payload.error) throw Object.assign(new Error(payload.error), payload.connect ? { userMessage: payload.error } : {});
       return busTransition(watch.state, payload.arrivals ?? [], watch, payload.fetchedAt);

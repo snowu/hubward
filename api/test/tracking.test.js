@@ -1,7 +1,10 @@
 import { env, runInDurableObject, runDurableObjectAlarm, createExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { bikeTransition, busTransition, notificationText, BIKE_INTERVAL, BUS_INTERVAL } from "../src/tracking-rules.js";
-import { validateWatch, DEVICE_PAUSE, DEVICE_FORGET } from "../src/tracking.js";
+import {
+  bikeTransition, busTransition, notificationText, BIKE_INTERVAL, BUS_INTERVAL,
+  inSchedule, nextScheduleEdge, nextScheduleStart, validSchedule, watchStatus, madridTime, LOCATION_FRESH,
+} from "../src/tracking-rules.js";
+import { validateWatch, watchLimits, validLocation, DEVICE_PAUSE, DEVICE_FORGET } from "../src/tracking.js";
 import { bikeFeed, stopPoller } from "../src/pollers.js";
 import { validateSubscription } from "../src/push.js";
 import worker from "../src/index.js";
@@ -20,6 +23,66 @@ describe("watch validation", () => {
     expect(placed.id).toBe(plain.id);
     expect(validateWatch({ ...busWatch, coordinates: [2.17, 41.38] }).coordinates).toBeUndefined();
     expect(validateWatch({ ...busWatch, coordinates: "x" }).coordinates).toBeUndefined();
+  });
+});
+
+// Sol, a rack at Sol, and a point ~6 km north.
+const SOL = [-3.7038, 40.4168];
+const placedRack = { ...bikeWatch, coordinates: SOL, radius: 1000 };
+const FAR = [-3.69, 40.47];
+/** A window around (or away from) Madrid's current time, so a runner's own
+ *  Date.now() lands inside (or outside) it. */
+function windowFrom(now, startOffset, endOffset) {
+  const { minute } = madridTime(now);
+  const clock = (m) => { const v = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`; };
+  return { days: [0, 1, 2, 3, 4, 5, 6], from: clock(minute + startOffset), to: clock(minute + endOffset) };
+}
+
+describe("schedules and radius", () => {
+  // Saturday 2026-10-24, 14:00 in Madrid (CEST); DST ends the next night.
+  const saturday = Date.UTC(2026, 9, 24, 12, 0);
+  const afternoons = { days: [1, 2, 3, 4, 5], from: "15:00", to: "18:00" };
+  it("reads the window in Madrid time, overnight windows included", () => {
+    expect(madridTime(saturday)).toEqual({ day: 6, minute: 14 * 60 });
+    const monday = Date.UTC(2026, 9, 26, 15, 30); // 16:30 CET
+    expect(inSchedule(afternoons, monday)).toBe(true);
+    expect(inSchedule(afternoons, Date.UTC(2026, 9, 26, 17, 0))).toBe(false); // 18:00, end exclusive
+    expect(inSchedule(afternoons, saturday)).toBe(false);
+    expect(inSchedule(null, saturday)).toBe(true);
+    const fridayNight = { days: [5], from: "23:00", to: "02:00" };
+    expect(inSchedule(fridayNight, Date.UTC(2026, 9, 23, 22, 30))).toBe(true); // Sat 00:30
+    expect(inSchedule(fridayNight, Date.UTC(2026, 9, 24, 22, 30))).toBe(false); // Sun 00:30
+  });
+  it("finds the next edge across a DST change and says when a paused watch resumes", () => {
+    // Monday 15:00 CET is 14:00 UTC, not the 13:00 a fixed offset would say.
+    expect(nextScheduleEdge(afternoons, saturday)).toBe(Date.UTC(2026, 9, 26, 14, 0));
+    expect(nextScheduleEdge(afternoons, Date.UTC(2026, 9, 26, 14, 30))).toBe(Date.UTC(2026, 9, 26, 17, 0));
+    expect(nextScheduleStart(afternoons, Date.UTC(2026, 9, 26, 14, 30))).toBe(Date.UTC(2026, 9, 27, 14, 0));
+    // An overnight window that opened yesterday closes today.
+    expect(nextScheduleEdge({ days: [5], from: "23:00", to: "02:00" }, Date.UTC(2026, 9, 23, 22, 30))).toBe(Date.UTC(2026, 9, 24, 0, 0));
+  });
+  it("pauses a watch out of range or on a stale position, and ignores a radius it cannot measure", () => {
+    const now = saturday;
+    expect(watchStatus(placedRack, { coordinates: SOL, at: now }, now)).toEqual({ active: true });
+    expect(watchStatus(placedRack, { coordinates: FAR, at: now }, now)).toMatchObject({ active: false, reason: "far" });
+    expect(watchStatus(placedRack, { coordinates: SOL, at: now - LOCATION_FRESH - 1 }, now)).toMatchObject({ active: false, reason: "stale" });
+    expect(watchStatus(placedRack, null, now).active).toBe(true);
+    expect(watchStatus({ ...placedRack, coordinates: undefined }, { coordinates: FAR, at: now }, now).active).toBe(true);
+    expect(watchStatus({ ...placedRack, radius: null }, { coordinates: FAR, at: now }, now).active).toBe(true);
+    expect(watchStatus({ ...placedRack, schedule: afternoons }, { coordinates: SOL, at: now }, now))
+      .toEqual({ active: false, reason: "schedule", resumes: Date.UTC(2026, 9, 26, 14, 0) });
+  });
+  it("validates limits and defaults a new watch to 1 km", () => {
+    expect(validateWatch(bikeWatch).radius).toBe(1000);
+    expect(validateWatch({ ...bikeWatch, radius: null }).radius).toBeNull();
+    expect(validSchedule({ days: [1, 1, 9], from: "15:00", to: "18:00" })).toEqual({ days: [1], from: "15:00", to: "18:00" });
+    expect(() => watchLimits({ radius: 750 })).toThrow();
+    expect(() => watchLimits({ schedule: { days: [], from: "15:00", to: "18:00" } })).toThrow();
+    expect(() => watchLimits({ schedule: { days: [1], from: "15:00", to: "15:00" } })).toThrow();
+    expect(() => watchLimits({ schedule: { days: [1], from: "25:00", to: "18:00" } })).toThrow();
+    expect(watchLimits({ schedule: null })).toEqual({ schedule: null });
+    expect(validLocation([-3.70381, 40.41681])).toEqual([-3.704, 40.417]);
+    expect(() => validLocation([0, 100])).toThrow();
   });
 });
 
@@ -416,6 +479,60 @@ describe("shared pollers and per-user runners", () => {
     await checking;
     expect((await stub.list()).watches).toEqual([]);
     expect(await feedUsers()).toEqual([]);
+  });
+});
+
+describe("paused watches", () => {
+  it("polls a rack only while the phone is near it, and starts again from a fresh count", async () => {
+    const { stub, user } = await runner();
+    let count = 0;
+    const pushes = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).includes("station_status")) return feed(count);
+      pushes.push(init);
+      return new Response(null, { status: 201 });
+    });
+    await stub.add(placedRack);
+    expect(await feedUsers()).toEqual([user]); // no position yet: as before
+    await stub.setLocation(FAR);
+    expect(await feedUsers()).toEqual([]);
+    expect((await stub.list()).watches[0].paused).toMatchObject({ reason: "far" });
+    await stub.setLocation(SOL);
+    expect(await feedUsers()).toEqual([user]);
+    await pollBikes();
+    count = 1;
+    await pollBikes();
+    expect(pushes).toHaveLength(1);
+    await stub.setLocation(FAR);
+    expect((await stub.list()).watches[0].rack).toBeUndefined();
+    count = 5;
+    await stub.setLocation(SOL);
+    await pollBikes(); // 1→5 happened while away: a baseline, not an alert
+    expect(pushes).toHaveLength(1);
+    expect((await stub.list()).watches[0].rack).toEqual({ bikes: 5, armed: true });
+  });
+  it("skips a rack that leaves range between syncs", async () => {
+    const { stub } = await runner();
+    await stub.add(placedRack);
+    await runInDurableObject(stub, (instance) => instance.setMeta("location", { coordinates: FAR, at: Date.now() }));
+    expect(await stub.onBikes({ stations: { 1: station(0) }, fetchedAt: Date.now() })).toEqual({ active: false });
+  });
+  it("subscribes a bus stop only inside its schedule and wakes at the next edge", async () => {
+    const { stub, user } = await runner();
+    const stop = { ...busWatch, targetId: "7171" };
+    const now = Date.now();
+    const later = windowFrom(now, 60, 120);
+    await stub.add({ ...stop, schedule: later });
+    expect(await stopUsers("7171")).toEqual([]);
+    const listed = (await stub.list()).watches[0];
+    expect(listed.paused).toMatchObject({ reason: "schedule" });
+    expect(listed.paused.resumes).toBe(nextScheduleEdge(later, now));
+    const alarm = await runInDurableObject(stub, (_, ctx) => ctx.storage.getAlarm());
+    expect(alarm).toBe(nextScheduleEdge(later, now));
+    await stub.configure(listed.id, { schedule: windowFrom(now, -60, 60) });
+    expect(await stopUsers("7171")).toEqual([user]);
+    await stub.configure(listed.id, { schedule: null });
+    expect((await stub.list()).watches[0]).toMatchObject({ schedule: null, paused: null });
   });
 });
 

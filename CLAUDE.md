@@ -138,7 +138,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 200 tests, no network
+npm test          # web smoke check, then vitest under workerd; 209 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -185,6 +185,20 @@ its watchers' own EMT quotas in turn — one connected watcher per 2-minute
 slot — trying the others if the chosen account fails, so one broken
 connection never silences everyone else's alerts. The shared login is a last
 resort only with `EMT_ACCOUNT = "optional"`.
+
+**A watch can be limited to a radius and a schedule** (`watchStatus()` in
+`src/tracking-rules.js`), set by tapping it in the tracking list. Outside
+either it is *paused*: `sync()` leaves it out of every poller subscription, so
+a stop nobody's schedule covers is not polled at all, and its alert state is
+cleared so it restarts from a fresh count rather than reporting what changed
+while it slept. The schedule is days plus one window in Madrid time (a window
+ending before it starts runs past midnight); the runner's alarm is brought
+forward to the next window edge. The radius is measured from the last
+position the page reported (`POST /tracking/location`, ~100 m, latest only)
+— a web app cannot read location while closed, so this is "where you last
+opened the app" and counts for `LOCATION_FRESH` (12 h); a stale position
+pauses radius-limited watches. New watches default to 1 km; a watch without
+coordinates, or a user who never shared a position, behaves as before.
 
 **Devices that stop opening the app stop costing anything.** Every page load
 (and a return to the app after a few hours in the background) re-registers

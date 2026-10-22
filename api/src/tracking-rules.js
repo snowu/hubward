@@ -73,3 +73,129 @@ export function notificationText(watch, alert) {
     body: `${alert.minutes <= 0 ? "Due now" : `In ${alert.minutes} min`} · ${where}`,
   };
 }
+
+/* When a watch is live. A watch may carry a schedule (days plus one window,
+ * in Madrid time) and a radius (metres around its stop or station). Outside
+ * either it is paused: not polled, not alerted, its state cleared so coming
+ * back starts from a fresh baseline instead of reporting what changed while
+ * nobody was looking. */
+export const RADIUS_CHOICES = [500, 1000, 2000];
+export const DEFAULT_RADIUS = 1000;
+/** How long a position the page reported keeps counting. The page can only
+ *  say where the phone is while it is open, so this is "where you last opened
+ *  the app". Long enough for a morning check-in to carry the working day,
+ *  short enough that yesterday's position does not decide today. */
+export const LOCATION_FRESH = 12 * 3_600_000;
+
+const madridClock = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Madrid", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+const madridDate = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Weekday (0 = Sunday, like Date#getDay) and minute of the day in Madrid. */
+export function madridTime(now) {
+  const parts = Object.fromEntries(madridClock.formatToParts(new Date(now)).map((p) => [p.type, p.value]));
+  return { day: WEEKDAYS.indexOf(parts.weekday), minute: Number(parts.hour) * 60 + Number(parts.minute) };
+}
+
+/** Madrid's UTC offset in minutes at an instant (60 or 120). */
+function madridOffset(now) {
+  const p = Object.fromEntries(madridDate.formatToParts(new Date(now)).map((part) => [part.type, part.value]));
+  const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute));
+  return Math.round((wall - Math.floor(now / 60_000) * 60_000) / 60_000);
+}
+
+const toMinute = (text) => {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(text ?? "");
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
+
+/** {days: [0..6], from: "HH:MM", to: "HH:MM"} or null. `days` are the days a
+ *  window *starts* on; a window whose end is before its start runs past
+ *  midnight into the next day. */
+export function validSchedule(value) {
+  if (value == null) return null;
+  const days = Array.isArray(value.days) ? [...new Set(value.days.map(Number))].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).sort() : [];
+  const from = toMinute(value.from);
+  const to = toMinute(value.to);
+  if (!days.length || from == null || to == null || from === to) return undefined;
+  return { days, from: value.from, to: value.to };
+}
+
+export function validRadius(value) {
+  if (value == null) return null;
+  return RADIUS_CHOICES.includes(Number(value)) ? Number(value) : undefined;
+}
+
+export function inSchedule(schedule, now) {
+  if (!schedule) return true;
+  const { day, minute } = madridTime(now);
+  const from = toMinute(schedule.from);
+  const to = toMinute(schedule.to);
+  if (from < to) return schedule.days.includes(day) && minute >= from && minute < to;
+  return (schedule.days.includes(day) && minute >= from) || (schedule.days.includes((day + 6) % 7) && minute < to);
+}
+
+/** The next instant the schedule opens or closes, after `now`. */
+export function nextScheduleEdge(schedule, now) {
+  if (!schedule) return null;
+  const { day, minute } = madridTime(now);
+  const from = toMinute(schedule.from);
+  const to = toMinute(schedule.to);
+  let best = Infinity;
+  // Yesterday's window can still be open past midnight, hence from -1.
+  for (let k = -1; k <= 7; k++) {
+    if (!schedule.days.includes((day + k + 7) % 7)) continue;
+    for (const edge of [from, to > from ? to : to + 1440]) {
+      const delta = k * 1440 + edge - minute;
+      if (delta > 0 && delta < best) best = delta;
+    }
+  }
+  if (best === Infinity) return null;
+  const start = Math.floor(now / 60_000) * 60_000;
+  const guess = start + best * 60_000;
+  // Local minutes, so a DST change in between moves the instant by an hour.
+  return guess - (madridOffset(guess) - madridOffset(now)) * 60_000;
+}
+
+/** The next instant the schedule opens, for "resumes Mon 15:00". */
+export function nextScheduleStart(schedule, now) {
+  let at = now;
+  for (let i = 0; i < 20; i++) {
+    at = nextScheduleEdge(schedule, at);
+    if (at == null) return null;
+    if (inSchedule(schedule, at)) return at;
+  }
+  return null;
+}
+
+function metresBetween([lon1, lat1], [lon2, lat2]) {
+  const x = (lon2 - lon1) * Math.cos((lat1 * Math.PI) / 180);
+  return Math.round(Math.hypot(x, lat2 - lat1) * 111_320);
+}
+
+/** Whether a watch is live now, and if not, why. A radius only applies once
+ *  the page has reported a position and the watch knows where it is; a
+ *  watch without either behaves as it always did. */
+export function watchStatus(watch, location, now) {
+  if (!inSchedule(watch.schedule, now)) return { active: false, reason: "schedule", resumes: nextScheduleStart(watch.schedule, now) };
+  if (watch.radius && watch.coordinates && location?.coordinates) {
+    if (now - location.at > LOCATION_FRESH) return { active: false, reason: "stale" };
+    const metres = metresBetween(location.coordinates, watch.coordinates);
+    if (metres > watch.radius) return { active: false, reason: "far", metres };
+  }
+  return { active: true };
+}
+
+/** When a watch's status can next change on its own: a schedule edge, or a
+ *  position going stale. Moving is reported by the page and syncs anyway. */
+export function nextStatusChange(watch, location, now) {
+  const times = [nextScheduleEdge(watch.schedule, now)];
+  if (watch.radius && watch.coordinates && location?.coordinates && now - location.at <= LOCATION_FRESH) {
+    times.push(location.at + LOCATION_FRESH + 1);
+  }
+  return times.filter((t) => t != null && t > now).reduce((a, b) => Math.min(a, b), Infinity);
+}
