@@ -316,6 +316,16 @@ gaps in the environment only — never over a real fault in the page. The
 browser UI otherwise still relies on manual verification rather than DOM
 tests.
 
+**A PR that changes the UI carries screenshots.** They live on the one
+orphan `screenshots` branch, never on the PR branch, each named
+`pr-<number>-<what>.png` (`pr-34-editor-360.png`). Publish with
+`tools/pr-screenshot.sh <pr> <image>...`: it commits on top of what the branch
+already holds, so earlier PRs' links keep working, and prints raw URLs to put
+in a PR comment as `<img src="…" width="320">`. The repo is public, so those
+URLs render without sign-in. Take them at 360px wide, in the style the change
+was reported in; the page can be served locally for layout, but cannot sign
+in (the worker only allows `ALLOWED_ORIGIN`).
+
 ## Data source
 
 **EMT MobilityLabs** — https://mobilitylabs.emtmadrid.es
