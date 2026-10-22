@@ -1,5 +1,5 @@
 /** Browser push is opt-in, and only requested in direct response to a tap. */
-export function createTracking({ api, signedIn, changed, locate = () => null }) {
+export function createTracking({ api, signedIn, changed, locate = () => null, position = () => null }) {
   let watches = [];
   let config;
   let deviceCount = 0;
@@ -95,6 +95,7 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
       deviceCount = data.devices ?? deviceCount;
       refresh();
       void backfillLocations(current);
+      void reportLocation(position(), { force: true });
     } catch { /* Tracking availability must not prevent the transport UI loading. */ }
   }
 
@@ -107,6 +108,28 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
       if (!coordinates || current !== generation) continue;
       try { await send("POST", { ...watch, coordinates }); } catch { return; }
     }
+  }
+
+  /** Tell the worker where the phone is, for watches limited to a radius.
+   *  It can only know while the page is open, so it hears on every fix, at
+   *  most every 10 minutes unless the phone has moved 200 m. `here` is
+   *  [lat, lon], geolocation's order. */
+  let reported = null;
+  async function reportLocation(here, { force = false } = {}) {
+    if (!here || !signedIn() || !watches.some((watch) => watch.radius)) return;
+    const coordinates = [here[1], here[0]];
+    if (!force && reported && Date.now() - reported.at < 10 * 60_000 && metres(reported.coordinates, coordinates) < 200) return;
+    reported = { coordinates, at: Date.now() };
+    try {
+      const data = await api("/tracking/location", { method: "POST", body: JSON.stringify({ coordinates }) });
+      watches = data.watches;
+      refresh();
+    } catch { reported = null; /* the next fix tries again */ }
+  }
+
+  function metres([lon1, lat1], [lon2, lat2]) {
+    const x = (lon2 - lon1) * Math.cos((lat1 * Math.PI) / 180);
+    return Math.hypot(x, lat2 - lat1) * 111_320;
   }
 
   async function send(method, body) {
@@ -232,7 +255,7 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
     container.replaceChildren();
     const intro = document.createElement("p");
     intro.className = "muted";
-    intro.textContent = "Buses: checked every 2 min; one alert per bus at 15 min or less. Bikes: checked every 30 sec; once a rack is below 6 bikes, an alert with the count for every bike docked or taken, until more than 6 are available.";
+    intro.textContent = "Buses: checked every 2 min; one alert per bus at 15 min or less. Bikes: checked every 30 sec; once a rack is below 6 bikes, an alert with the count for every bike docked or taken, until more than 6 are available. Tap an alert to limit it to a distance or to set hours.";
     container.append(intro);
     if (watches.length && !deviceCount) {
       const paused = document.createElement("p");
@@ -247,15 +270,23 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
     for (const watch of watches) {
       const row = document.createElement("div");
       row.className = "tracking-item";
-      const text = document.createElement("span");
+      // The row opens its radius and schedule; the bell stays on/off.
+      const text = document.createElement("button");
+      text.type = "button";
+      text.className = "tracking-edit";
+      text.setAttribute("aria-label", `Alert settings for ${watch.label || watch.targetId}`);
+      text.addEventListener("click", () => openEditor(watch));
       text.textContent = `${watch.kind === "bus" ? `Line ${watch.line} · ` : ""}${watch.label || watch.targetId}${watch.destination ? ` → ${watch.destination}` : ""}`;
       const status = document.createElement("small");
       const checked = watch.lastCheck
         ? `checked ${new Date(watch.lastCheck).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
         : "waiting for first check";
       const rack = rackState(watch.rack);
-      status.textContent = watch.error || (rack ? `${rack} · ${checked}` : checked.charAt(0).toUpperCase() + checked.slice(1));
-      text.append(document.createElement("br"), status);
+      status.textContent = watch.paused ? pausedText(watch.paused)
+        : watch.error || (rack ? `${rack} · ${checked}` : checked.charAt(0).toUpperCase() + checked.slice(1));
+      const limits = document.createElement("small");
+      limits.textContent = limitsText(watch);
+      text.append(document.createElement("br"), status, document.createElement("br"), limits);
       row.append(text, button(watch));
       container.append(row);
     }
@@ -271,6 +302,110 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
     container.append(enableButton);
   }
 
+  const DAY_NAMES = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const distance = (m) => (m >= 1000 ? `${(m / 1000).toFixed(m % 1000 ? 1 : 0)} km` : `${m} m`);
+
+  function pausedText(paused) {
+    if (paused.reason === "far") return `Paused · ${distance(Math.round(paused.metres / 100) * 100)} away`;
+    if (paused.reason === "stale") return "Paused · open Hubward nearby to resume";
+    if (paused.reason === "schedule" && paused.resumes) {
+      return `Paused · resumes ${new Date(paused.resumes).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
+    }
+    return "Paused";
+  }
+
+  /** "Within 1 km · Mo Tu We 15:00–18:00", or "Anywhere, any time". */
+  function limitsText(watch) {
+    const where = watch.radius ? `Within ${distance(watch.radius)}` : "Anywhere";
+    const s = watch.schedule;
+    if (!s) return `${where}, any time`;
+    const days = s.days.length === 7 ? "every day"
+      : [1, 2, 3, 4, 5, 6, 0].filter((d) => s.days.includes(d)).map((d) => DAY_NAMES[d]).join(" ");
+    return `${where} · ${days} ${s.from}–${s.to}`;
+  }
+
+  // The editor dialog lives in index.html; it is filled per watch here.
+  const editor = {
+    dialog: document.getElementById("tracking-edit-dialog"),
+    form: document.getElementById("tracking-edit-form"),
+    title: document.getElementById("tracking-edit-title"),
+    target: document.getElementById("tracking-edit-target"),
+    radius: document.getElementById("tracking-edit-radius"),
+    days: document.getElementById("tracking-edit-days"),
+    hours: document.getElementById("tracking-edit-hours"),
+    from: document.getElementById("tracking-edit-from"),
+    to: document.getElementById("tracking-edit-to"),
+    error: document.getElementById("tracking-edit-error"),
+    save: document.getElementById("tracking-edit-save"),
+    watch: null,
+  };
+  const pickedDays = () => [...editor.days.querySelectorAll("button[aria-pressed=true]")].map((b) => Number(b.dataset.day));
+  const showHours = () => {
+    const any = pickedDays().length > 0;
+    editor.hours.hidden = !any;
+    editor.from.required = editor.to.required = any;
+  };
+  editor.radius.addEventListener("click", (event) => {
+    const choice = event.target.closest("button");
+    if (!choice) return;
+    for (const b of editor.radius.querySelectorAll("button")) b.setAttribute("aria-selected", String(b === choice));
+  });
+  editor.days.addEventListener("click", (event) => {
+    const day = event.target.closest("button");
+    if (!day) return;
+    day.setAttribute("aria-pressed", String(day.getAttribute("aria-pressed") !== "true"));
+    showHours();
+  });
+  document.getElementById("tracking-edit-cancel").addEventListener("click", () => editor.dialog.close());
+  editor.form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const watch = editor.watch;
+    if (!watch) return;
+    const days = pickedDays();
+    if (days.length && editor.from.value === editor.to.value) {
+      editor.error.textContent = "Start and end need to differ.";
+      editor.error.hidden = false;
+      return;
+    }
+    const radius = editor.radius.querySelector("button[aria-selected=true]")?.dataset.radius;
+    editor.save.disabled = true;
+    try {
+      const data = await api("/tracking", { method: "PATCH", body: JSON.stringify({
+        id: watch.id,
+        radius: radius ? Number(radius) : null,
+        schedule: days.length ? { days, from: editor.from.value, to: editor.to.value } : null,
+      }) });
+      watches = data.watches;
+      editor.dialog.close();
+      refresh();
+      void reportLocation(position(), { force: true });
+    } catch (error) {
+      editor.error.textContent = error.message;
+      editor.error.hidden = false;
+    } finally {
+      editor.save.disabled = false;
+    }
+  });
+
+  function openEditor(watch) {
+    editor.watch = watch;
+    editor.title.textContent = watch.label || (watch.kind === "bike" ? `Station ${watch.targetId}` : `Stop ${watch.targetId}`);
+    editor.target.textContent = watch.kind === "bus"
+      ? `Line ${watch.line}${watch.destination ? ` → ${watch.destination}` : ""} at stop ${watch.targetId}`
+      : `Bike station ${watch.targetId}`;
+    if (!watch.coordinates) editor.target.textContent += " · location unknown, so the distance limit cannot apply yet";
+    for (const b of editor.radius.querySelectorAll("button")) {
+      b.setAttribute("aria-selected", String(b.dataset.radius === String(watch.radius ?? "")));
+    }
+    const days = watch.schedule?.days ?? [];
+    for (const b of editor.days.querySelectorAll("button")) b.setAttribute("aria-pressed", String(days.includes(Number(b.dataset.day))));
+    editor.from.value = watch.schedule?.from ?? "15:00";
+    editor.to.value = watch.schedule?.to ?? "18:00";
+    editor.error.hidden = true;
+    showHours();
+    editor.dialog.showModal();
+  }
+
   async function disconnect() {
     if (!supported()) return;
     const reg = await navigator.serviceWorker.getRegistration(new URL("./", import.meta.url));
@@ -279,5 +414,5 @@ export function createTracking({ api, signedIn, changed, locate = () => null }) 
     await api("/tracking/subscription", { method: "DELETE", body: JSON.stringify({ endpoint: subscription.endpoint }) });
     await subscription.unsubscribe();
   }
-  return { load, checkIn, button, setButton, removeAll, count: () => watches.length, indicator, isTracked, renderList, disconnect, clear() { generation++; watches = []; refresh(); } };
+  return { load, checkIn, reportLocation, button, setButton, removeAll, count: () => watches.length, indicator, isTracked, renderList, disconnect, clear() { generation++; watches = []; refresh(); } };
 }

@@ -1,4 +1,4 @@
-import { validateWatch } from "./tracking.js";
+import { validateWatch, watchLimits, validLocation } from "./tracking.js";
 import { validateSubscription } from "./push.js";
 export { TrackingRunner } from "./tracking.js";
 export { BikeFeed, StopPoller } from "./pollers.js";
@@ -437,7 +437,7 @@ export default {
         // Pollers call the runner back by user id, so it needs to know it.
         await runner.identify(user.id);
         let body;
-        if (["POST", "DELETE"].includes(method)) {
+        if (["POST", "PATCH", "DELETE"].includes(method)) {
           const raw = await request.text();
           if (raw.length > 8192) return json({ message: "Request too large" }, env, 413);
           try { body = JSON.parse(raw); } catch { return json({ message: "Invalid JSON" }, env, 400); }
@@ -454,6 +454,8 @@ export default {
           result = await runner.add(watch);
         }
         else if (pathname === "/tracking" && method === "DELETE" && typeof body?.id === "string") result = await runner.remove(body.id);
+        else if (pathname === "/tracking" && method === "PATCH" && typeof body?.id === "string") result = await runner.configure(body.id, watchLimits(body));
+        else if (pathname === "/tracking/location" && method === "POST") result = await runner.setLocation(validLocation(body?.coordinates));
         else if (pathname === "/tracking/subscription" && method === "POST") result = await runner.subscribe(validateSubscription(body));
         else if (pathname === "/tracking/subscription" && method === "DELETE" && typeof body?.endpoint === "string") result = await runner.unsubscribe(body.endpoint);
         else return json({ message: "Unknown tracking request" }, env, 400);

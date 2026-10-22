@@ -995,6 +995,7 @@ const trackingClear = document.getElementById("tracking-clear");
 const tracking = createTracking({
   api, signedIn: () => !!authSession,
   locate: (kind, id) => (kind === "bike" ? bikeById.get(String(id))?.coordinates : details[id]?.coordinates) ?? null,
+  position: () => myLocation,
   changed: () => {
     render();
     renderBikes();
@@ -5536,6 +5537,7 @@ function applyLocation(position, { recenter = false, forceNearby = false } = {})
   const bikeMapShown = section === "bikes" && bikeMap && !bikeMapEl.hidden;
   if (!bikeMapShown || recenter) void loadBikesNear(myLocation[0], myLocation[1], { force: forceNearby });
   scheduleJourneys({ force: forceNearby });
+  void tracking.reportLocation(myLocation);
 }
 
 function refreshLocation({ userInitiated = false, recenter = false, forceNearby = false } = {}) {
