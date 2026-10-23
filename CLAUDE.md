@@ -138,7 +138,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 213 tests, no network
+npm test          # web smoke check, then vitest under workerd; 216 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -901,6 +901,16 @@ is most stale), and manually per-card or all at once.
    call as the hubs and drawn as the first card; "Save as hub" opens the hub
    editor prefilled. It is kept per user in localStorage for 12 hours, so the
    card is still there when you look again at the next corner.
+
+   **Or press and hold the map** (right-click on a desktop): a "Dropped pin"
+   popup offers "Go here", which sets the same destination, switches to the
+   list and leaves a pin on the map. MapLibre has no long-press event, so
+   `bindGoHere()` times its touch events (550ms, cancelled by 10px of movement
+   or a second finger, ignored on pins and popups) and swallows the lift that
+   ends the press — a browser may turn it into a click, and a map click closes
+   the popup just opened. The card is named after the fact by
+   `GET /places/reverse` (Nominatim, ~11m grid, cached 30 days) without
+   re-planning.
 
    **Every destination card also offers BiciMAD and walking.** The Planner
    reads the city's bike counts once per plan (the same 45s `bikes` cache as

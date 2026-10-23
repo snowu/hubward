@@ -643,6 +643,7 @@ function renderGoForm() {
   goForm.hidden = !authSession || document.body.dataset.section === "bikes"
     || busListMode !== "places" || listEl.hidden;
   goCurrent.hidden = !goPlace;
+  syncGoMarker();
   document.getElementById("go-current-name").textContent = goPlace ? `To ${goPlace.name}` : "";
 }
 
@@ -696,6 +697,131 @@ document.getElementById("go-save").addEventListener("click", () => {
   placesDialog.showModal();
   openPlaceEditor({ name: goPlace.name, address: goPlace.address, lat: goPlace.lat, lon: goPlace.lon });
 });
+
+/** A name arrived for the place already being planned: show it, but do not
+ *  plan again — the coordinates are what the planner used, and they hold. */
+function renameGoPlace(name, address) {
+  if (!goPlace || !name) return;
+  goPlace = { ...goPlace, name: String(name).slice(0, 80), address: address ?? goPlace.address };
+  try {
+    if (goKey()) localStorage.setItem(goKey(), JSON.stringify(goPlace));
+  } catch {
+    // Kept in memory only.
+  }
+  render();
+}
+
+/* ---- Go here, from the map ----------------------------------------------- */
+
+// Held this long without moving, a press on the map offers "Go here": long
+// enough that a slow pan never trips it, short enough not to feel stuck.
+const LONG_PRESS_MS = 550;
+const LONG_PRESS_SLOP_PX = 10;
+let goMarker = null;
+
+function syncGoMarker() {
+  if (!leafletMap) return;
+  if (!goPlace) {
+    goMarker?.remove();
+    goMarker = null;
+    return;
+  }
+  const at = [goPlace.lon, goPlace.lat];
+  if (!goMarker) {
+    goMarker = domMarker('<span aria-hidden="true"></span>', "go-pin", at, { anchor: "bottom" })
+      .addTo(leafletMap);
+  }
+  goMarker.setLngLat(at);
+  goMarker.getElement().title = `Going to ${goPlace.name}`;
+}
+
+async function goHere(lngLat) {
+  closeMapPopup();
+  const lat = Number(lngLat.lat.toFixed(5));
+  const lon = Number(lngLat.lng.toFixed(5));
+  setGoPlace({ name: "Dropped pin", lat, lon });
+  showView("list");
+  window.scrollTo({ top: 0 });
+  try {
+    const found = await api(`/places/reverse?lat=${lat}&lon=${lon}`);
+    // Only if it is still where we are going: a second pin may have landed.
+    if (goPlace?.lat === lat && goPlace?.lon === lon) renameGoPlace(found?.name, found?.displayName);
+  } catch {
+    // An unnamed pin still plans; the name is a nicety.
+  }
+}
+
+function goHerePopup(lngLat) {
+  const wrap = document.createElement("div");
+  wrap.className = "go-here-popup";
+  wrap.append(popupHead("Dropped pin"));
+  const metres = metresFromCurrent([lngLat.lng, lngLat.lat]);
+  if (metres != null) {
+    const away = document.createElement("p");
+    away.className = "stop-num";
+    away.textContent = `${formatDistance(Math.round(metres))} from you`;
+    wrap.append(away);
+  }
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "go-here";
+  go.textContent = "Go here";
+  go.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void goHere(lngLat);
+  });
+  wrap.append(go);
+  return wrap;
+}
+
+/** Press and hold anywhere on the map (right-click on a desktop) to go there.
+ *
+ * MapLibre has no long-press event, so this is a timer on its touch events,
+ * cancelled by any real movement or a second finger. Presses that start on a
+ * pin or a popup are theirs, not the map's. Android also turns a long press
+ * into a contextmenu event; both just open the same popup. The lift that ends
+ * a long press is swallowed: a browser may still turn it into a click, and a
+ * click on the map closes the popup it has just opened.
+ */
+function bindGoHere(map) {
+  let timer = null;
+  let start = null;
+  let pressed = false;
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    start = null;
+  };
+  const offer = (lngLat) => {
+    cancel();
+    pressed = true;
+    if (!authSession) return;
+    showMapPopup(map, lngLat, "go-here", () => goHerePopup(lngLat));
+  };
+  map.on("touchstart", (event) => {
+    cancel();
+    pressed = false;
+    const touch = event.originalEvent;
+    if (touch.touches?.length !== 1) return;
+    if (touch.target?.closest?.(".maplibregl-marker, .maplibregl-popup")) return;
+    start = event.point;
+    const lngLat = event.lngLat;
+    timer = setTimeout(() => offer(lngLat), LONG_PRESS_MS);
+  });
+  map.on("touchmove", (event) => {
+    if (start && Math.hypot(event.point.x - start.x, event.point.y - start.y) > LONG_PRESS_SLOP_PX) cancel();
+  });
+  map.on("touchend", (event) => {
+    if (pressed && event.originalEvent?.cancelable) event.originalEvent.preventDefault();
+    pressed = false;
+    cancel();
+  });
+  map.on("touchcancel", cancel);
+  map.on("contextmenu", (event) => {
+    event.originalEvent?.preventDefault?.();
+    offer(event.lngLat);
+  });
+}
 
 /** What the planner is asked about: the one-off destination first, then the
  *  hubs you are not already at. */
@@ -2874,6 +3000,8 @@ function ensureMap() {
   leafletMap.on("moveend", loadNearby);
   // A tap on the map itself dismisses whatever popup is open.
   leafletMap.on("click", () => closeMapPopup());
+  bindGoHere(leafletMap);
+  syncGoMarker();
 
   // Fit once, on the first build, when all pins are known.
   const points = stops.map((s) => details[s.stop_id]?.coordinates).filter(Boolean);

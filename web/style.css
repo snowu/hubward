@@ -607,6 +607,10 @@ body.map-is-fullscreen { overflow: hidden; }
 #go-clear { width: 32px; padding: 0; }
 #go-message { margin: 0; font-size: 0.75rem; }
 #go-message:empty { display: none; }
+/* A dropped map pin: where the one-off destination is. */
+.go-pin { background: none; border: none; }
+.go-pin span { display: grid; place-items: center; width: 30px; height: 30px; border: 3px solid white; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--accent); box-shadow: 0 2px 8px rgb(0 0 0 / 0.55); }
+.go-here-popup .go-here { width: 100%; min-height: 38px; margin-top: 0.5rem; }
 /* Bike and walk rows: a door-to-door time, not a countdown to a bus. */
 .place-mode svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .place-route time.mode-total { color: var(--fg); font-size: 0.95rem; font-weight: 700; }
