@@ -257,8 +257,8 @@ const board = (stopId, line, ...seconds) => ({
 /** In-memory Planner sources. Nearby is an exact straight-line disc; walking
  *  is straight-line unless `walkM` overrides a stop; anything listed in
  *  `failing` rejects. Every read is recorded. */
-function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = false, failing = [] }) {
-  const reads = { nearby: [], board: [], route: [], incidents: [] };
+function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = false, failing = [], bikes }) {
+  const reads = { nearby: [], board: [], route: [], incidents: [], bikes: 0 };
   const fail = (what) => Promise.reject(new Error(`${what} is down`));
   return {
     reads,
@@ -289,6 +289,12 @@ function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = fals
           }),
         };
       },
+      ...(bikes === undefined ? {} : {
+        bikes() {
+          reads.bikes += 1;
+          return failing.includes("bikes") ? fail("bikes") : Promise.resolve({ stations: bikes, fetchedAt: 7 });
+        },
+      }),
     },
   };
 }
@@ -465,5 +471,58 @@ describe("plan: input", () => {
 
   it("stamps the plan with the time it was asked for", async () => {
     expect((await planFor(empty(), hubs(1), SUMMER_NOON)).generatedAt).toBe(SUMMER_NOON.getTime());
+  });
+});
+
+describe("plan: BiciMAD and walking", () => {
+  const station = (id, northM, eastM, extra = {}) => {
+    const { lat, lon } = at(northM, eastM);
+    return { id, number: id, name: `Station ${id}`, coordinates: [lon, lat],
+      bikes: 8, freeBases: 8, renting: true, returning: true, inService: true, ...extra };
+  };
+  const bikeWorld = (bikes, failing = []) => world({ stops: [], bikes, failing });
+
+  it("rents near the rider and docks near the destination", async () => {
+    const w = bikeWorld([
+      station("empty", 50, 0, { bikes: 0 }),
+      station("closed", 60, 0, { renting: false }),
+      station("near", 200, 0),
+      station("full", 3950, 0, { freeBases: 0 }),
+      station("dock", 3800, 0),
+    ]);
+    const result = await planFor(w, [hub(4000, 0)], SUMMER_NOON);
+    const { bike } = result.destinations[0];
+    expect(bike).toMatchObject({ pickup: { id: "near" }, dropoff: { id: "dock" }, fetchedAt: 7 });
+    // ~520m on foot, two minutes at the stations and ~4.68km in the saddle
+    // (each 1.3× the straight line; the fixture grid is off haversine by ~0.1%,
+    // so these are checked to the nearest few metres).
+    expect(bike.pickup.walkM).toBeCloseTo(260, -1);
+    expect(bike.rideM).toBeCloseTo(4680, -2);
+    expect(bike.estimatedSeconds).toBeCloseTo(520 / 1.3 + 120 + 4680 / 4.2, -1);
+    expect(w.reads.bikes).toBe(1);
+  });
+
+  it("walks a little further rather than chase the last bike", async () => {
+    const w = bikeWorld([
+      station("last", 50, 0, { bikes: 1 }),
+      station("plenty", 150, 0),
+      station("dock", 4000, 0),
+    ]);
+    const result = await planFor(w, [hub(4000, 0)], SUMMER_NOON);
+    expect(result.destinations[0].bike.pickup.id).toBe("plenty");
+  });
+
+  it("offers no bike for a trip too short to unlock one, but still the walk", async () => {
+    const w = bikeWorld([station("a", 0, 0), station("b", 300, 0)]);
+    const result = await planFor(w, [hub(300, 0)], SUMMER_NOON);
+    expect(result.destinations[0].bike).toBeNull();
+    expect(result.destinations[0].walk.metres).toBeCloseTo(390, -1);
+    expect(result.destinations[0].walk.seconds).toBeCloseTo(300, -1);
+  });
+
+  it("still plans the buses when bike counts cannot be read", async () => {
+    const result = await planFor(bikeWorld([station("a", 0, 0)], ["bikes"]), [hub(4000, 0)], SUMMER_NOON);
+    expect(result.destinations[0].bike).toBeNull();
+    expect(result.destinations[0].walk.metres).toBeCloseTo(5200, -2);
   });
 });

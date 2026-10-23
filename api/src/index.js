@@ -398,6 +398,7 @@ function plannerSources(requestUrl, emt, ctx) {
     route: (line) => cachedRoute(requestUrl, emt, line, ctx),
     incidents: (line) => cachedIncidents(requestUrl, emt, line, ctx),
     walking: (body) => walkingMatrix(requestUrl, body, ctx),
+    bikes: () => cachedBikeStations(requestUrl, emt, ctx),
   };
 }
 

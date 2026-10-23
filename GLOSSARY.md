@@ -14,7 +14,7 @@ Every arrival EMT currently predicts at one bus stop, with the time it was read.
 _Avoid_: arrivals list, estimations
 
 **Planner**:
-The part of Hubward that chooses how to reach each Hub from where the rider stands right now, by bus, on foot, or with one transfer.
+The part of Hubward that chooses how to reach each Hub — or a one-off place the rider searched for — from where they stand right now: by bus, with one transfer, by BiciMAD, or on foot.
 _Avoid_: journey service, router
 
 **Account**:

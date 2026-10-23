@@ -597,6 +597,19 @@ body.map-is-fullscreen { overflow: hidden; }
 .place-route time { color: var(--success); font-size: 1.15rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .place-line { display: grid; place-items: center; min-height: 32px; border-radius: 10px; background: var(--active); font-size: 1.1rem; }
 .place-card > .age { margin: 0.4rem 0 0; }
+/* Go anywhere: a one-off destination planned like a hub. */
+.go-form { display: grid; gap: 0.4rem; flex: none; margin: 0.35rem 0 0.15rem; }
+.go-form[hidden], .go-current[hidden] { display: none; }
+.go-form input { min-height: 40px; }
+.go-current { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; }
+.go-current span { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.go-current button { min-height: 32px; padding: 0 0.6rem; font-size: 0.75rem; }
+#go-clear { width: 32px; padding: 0; }
+#go-message { margin: 0; font-size: 0.75rem; }
+#go-message:empty { display: none; }
+/* Bike and walk rows: a door-to-door time, not a countdown to a bus. */
+.place-mode svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.place-route time.mode-total { color: var(--fg); font-size: 0.95rem; font-weight: 700; }
 #places-dialog { width: min(92vw, 28rem); }
 #places-list { display: grid; gap: 0.4rem; }
 .place-manage-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0; border-bottom: 1px solid var(--separator); }
