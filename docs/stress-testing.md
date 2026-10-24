@@ -1,8 +1,10 @@
 # Stress testing
 
 How to load-test Hubward for a few thousand people at once, written
-2026-10-24 against `7398e8e`. Nothing here exists yet; it is the test
-`docs/scaling.md` says to run before launch.
+2026-10-24 against `7398e8e`. Steps 1–4 for a local worker now exist in
+`loadtest/` (see its README), and what they found is in
+`docs/load-test-results.md`. A staging environment (step 3) does not exist
+yet; the same k6 script runs against one once it does.
 
 ## Why not just aim it at production
 

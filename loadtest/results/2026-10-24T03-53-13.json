@@ -1,0 +1,813 @@
+{
+  "config": {
+    "levels": [
+      50,
+      100,
+      200,
+      400
+    ],
+    "users": 400,
+    "ramp": "30s",
+    "hold": "3m",
+    "holdSeconds": 180,
+    "session": "90",
+    "alerts": 0.3,
+    "latency": "150-600",
+    "fail525": 0,
+    "quota": 0
+  },
+  "rows": [
+    {
+      "riders": 50,
+      "seconds": 255,
+      "thresholdsPassed": false,
+      "requests": 2390,
+      "requestsPerSecond": 9.372490797106934,
+      "failedRate": 0,
+      "p95": {
+        "all": 2033.8607707999997,
+        "arrivals": 2131.265877,
+        "journeys": 4873.968716599998
+      },
+      "liveBoards": 484,
+      "access": {
+        "GET /auth/config": {
+          "statuses": {
+            "200": 86
+          },
+          "p95": 779,
+          "count": 86
+        },
+        "GET /auth/me": {
+          "statuses": {
+            "200": 86
+          },
+          "p95": 1430,
+          "count": 86
+        },
+        "GET /bikes/saved": {
+          "statuses": {
+            "200": 86
+          },
+          "p95": 1427,
+          "count": 86
+        },
+        "GET /stops": {
+          "statuses": {
+            "200": 86
+          },
+          "p95": 1430,
+          "count": 86
+        },
+        "GET /auth/emt": {
+          "statuses": {
+            "200": 86
+          },
+          "p95": 1907,
+          "count": 86
+        },
+        "GET /arrivals": {
+          "statuses": {
+            "200": 1824
+          },
+          "p95": 2128,
+          "count": 1824
+        },
+        "GET /stops/nearby": {
+          "statuses": {
+            "200": 19
+          },
+          "p95": 603,
+          "count": 19
+        },
+        "GET /stops/:id/detail": {
+          "statuses": {
+            "200": 19
+          },
+          "p95": 1462,
+          "count": 19
+        },
+        "GET /bikes/nearby": {
+          "statuses": {
+            "200": 26
+          },
+          "p95": 505,
+          "count": 26
+        },
+        "GET /lines/:id/route": {
+          "statuses": {
+            "200": 19
+          },
+          "p95": 2994,
+          "count": 19
+        },
+        "GET /live": {
+          "statuses": {
+            "101": 19
+          },
+          "p95": 790,
+          "count": 19
+        },
+        "GET /places/geocode": {
+          "statuses": {
+            "200": 43
+          },
+          "p95": 700,
+          "count": 43
+        },
+        "POST /journeys": {
+          "statuses": {
+            "200": 13
+          },
+          "p95": 5734,
+          "count": 13
+        }
+      },
+      "faults": {},
+      "routes": {
+        "nearby": {
+          "count": 19,
+          "p95": 340.8892624999994
+        },
+        "auth-emt": {
+          "count": 86,
+          "p95": 1808.2903345
+        },
+        "auth-me": {
+          "count": 86,
+          "p95": 1430.75074225
+        },
+        "bikes-saved": {
+          "count": 86,
+          "p95": 1430.9084345
+        },
+        "bikes-nearby": {
+          "count": 26,
+          "p95": 455.6197775
+        },
+        "arrivals": {
+          "count": 1821,
+          "p95": 2131.265877
+        },
+        "journeys": {
+          "count": 13,
+          "p95": 4873.968716599998
+        },
+        "route": {
+          "count": 19,
+          "p95": 1347.951209699996
+        },
+        "geocode": {
+          "count": 43,
+          "p95": 697.6693157999999
+        },
+        "auth-config": {
+          "count": 86,
+          "p95": 776.39673
+        },
+        "detail": {
+          "count": 19,
+          "p95": 840.9238234999985
+        },
+        "stops": {
+          "count": 86,
+          "p95": 1429.55101425
+        }
+      },
+      "upstream": {
+        "seconds": 255,
+        "calls": {
+          "push": 220,
+          "emt:arrivals": 2522,
+          "supabase:auth-user": 1789,
+          "supabase:get bike_stations": 86,
+          "supabase:get bus_stops": 86,
+          "supabase:get emt_accounts": 1647,
+          "emt:nearby": 51,
+          "gbfs:station_status": 12,
+          "emt:detail": 16,
+          "gbfs:station_information": 1,
+          "emt:route": 96,
+          "routing:table": 11,
+          "photon:search": 40,
+          "emt:incidents": 64
+        },
+        "emtTotal": 2749,
+        "distinctArrivalStops": 385,
+        "emtAccountsUsed": 148,
+        "emtBusiestAccount": 114,
+        "failuresInjected": {
+          "http525": 0,
+          "quota98": 0
+        },
+        "pushes": 220,
+        "maxInFlight": 122
+      },
+      "polls": {
+        "stop": 214,
+        "stopErrors": 0,
+        "stopFanOut": 252,
+        "stopFanOutFailed": 0,
+        "bike": 8,
+        "bikeFanOut": 464,
+        "bikeFanOutFailed": 0
+      }
+    },
+    {
+      "riders": 100,
+      "seconds": 255,
+      "thresholdsPassed": false,
+      "requests": 4549,
+      "requestsPerSecond": 17.84952969009507,
+      "failedRate": 0,
+      "p95": {
+        "all": 2844.927942399999,
+        "arrivals": 2806.740022,
+        "journeys": 10373.000103949998
+      },
+      "liveBoards": 1028,
+      "access": {
+        "GET /auth/config": {
+          "statuses": {
+            "200": 181
+          },
+          "p95": 1799,
+          "count": 181
+        },
+        "GET /auth/me": {
+          "statuses": {
+            "200": 181
+          },
+          "p95": 2651,
+          "count": 181
+        },
+        "GET /bikes/saved": {
+          "statuses": {
+            "200": 181
+          },
+          "p95": 2651,
+          "count": 181
+        },
+        "GET /stops": {
+          "statuses": {
+            "200": 181
+          },
+          "p95": 2651,
+          "count": 181
+        },
+        "GET /auth/emt": {
+          "statuses": {
+            "200": 181
+          },
+          "p95": 4003,
+          "count": 181
+        },
+        "GET /arrivals": {
+          "statuses": {
+            "200": 3345
+          },
+          "p95": 2799,
+          "count": 3345
+        },
+        "GET /bikes/nearby": {
+          "statuses": {
+            "200": 53
+          },
+          "p95": 338,
+          "count": 53
+        },
+        "GET /stops/nearby": {
+          "statuses": {
+            "200": 49
+          },
+          "p95": 244,
+          "count": 49
+        },
+        "GET /stops/:id/detail": {
+          "statuses": {
+            "200": 49
+          },
+          "p95": 1271,
+          "count": 49
+        },
+        "GET /lines/:id/route": {
+          "statuses": {
+            "200": 49
+          },
+          "p95": 1113,
+          "count": 49
+        },
+        "GET /live": {
+          "statuses": {
+            "101": 49
+          },
+          "p95": 1180,
+          "count": 49
+        },
+        "GET /places/geocode": {
+          "statuses": {
+            "200": 73
+          },
+          "p95": 1155,
+          "count": 73
+        },
+        "POST /journeys": {
+          "statuses": {
+            "200": 30
+          },
+          "p95": 10460,
+          "count": 30
+        }
+      },
+      "faults": {},
+      "routes": {
+        "auth-me": {
+          "count": 181,
+          "p95": 2655.364771
+        },
+        "journeys": {
+          "count": 30,
+          "p95": 10373.000103949998
+        },
+        "auth-config": {
+          "count": 181,
+          "p95": 1804.973626
+        },
+        "bikes-saved": {
+          "count": 181,
+          "p95": 2655.744323
+        },
+        "stops": {
+          "count": 181,
+          "p95": 2655.426824
+        },
+        "bikes-nearby": {
+          "count": 53,
+          "p95": 334.157882
+        },
+        "nearby": {
+          "count": 49,
+          "p95": 228.43109459999974
+        },
+        "auth-emt": {
+          "count": 181,
+          "p95": 4009.245967
+        },
+        "geocode": {
+          "count": 73,
+          "p95": 1147.2422409999997
+        },
+        "route": {
+          "count": 49,
+          "p95": 1094.5017557999997
+        },
+        "detail": {
+          "count": 49,
+          "p95": 1258.6586613999998
+        },
+        "arrivals": {
+          "count": 3341,
+          "p95": 2806.740022
+        }
+      },
+      "upstream": {
+        "seconds": 255,
+        "calls": {
+          "emt:arrivals": 4475,
+          "push": 238,
+          "supabase:auth-user": 3219,
+          "supabase:get bike_stations": 181,
+          "supabase:get bus_stops": 181,
+          "supabase:get emt_accounts": 2935,
+          "gbfs:station_information": 1,
+          "gbfs:station_status": 12,
+          "emt:nearby": 59,
+          "emt:detail": 36,
+          "emt:route": 138,
+          "photon:search": 70,
+          "routing:table": 25,
+          "emt:incidents": 99,
+          "nominatim:search": 1
+        },
+        "emtTotal": 4807,
+        "distinctArrivalStops": 590,
+        "emtAccountsUsed": 188,
+        "emtBusiestAccount": 111,
+        "failuresInjected": {
+          "http525": 0,
+          "quota98": 0
+        },
+        "pushes": 238,
+        "maxInFlight": 110
+      },
+      "polls": {
+        "stop": 211,
+        "stopErrors": 0,
+        "stopFanOut": 249,
+        "stopFanOutFailed": 0,
+        "bike": 9,
+        "bikeFanOut": 522,
+        "bikeFanOutFailed": 0
+      }
+    },
+    {
+      "riders": 200,
+      "seconds": 255,
+      "thresholdsPassed": false,
+      "requests": 8328,
+      "requestsPerSecond": 32.65689524104819,
+      "failedRate": 0,
+      "p95": {
+        "all": 6255.7937796999995,
+        "arrivals": 6373.9669754999995,
+        "journeys": 21910.46447705
+      },
+      "liveBoards": 1686,
+      "access": {
+        "GET /stops": {
+          "statuses": {
+            "200": 339
+          },
+          "p95": 4740,
+          "count": 339
+        },
+        "GET /auth/config": {
+          "statuses": {
+            "200": 339
+          },
+          "p95": 1514,
+          "count": 339
+        },
+        "GET /bikes/saved": {
+          "statuses": {
+            "200": 339
+          },
+          "p95": 4735,
+          "count": 339
+        },
+        "GET /auth/me": {
+          "statuses": {
+            "200": 339
+          },
+          "p95": 4735,
+          "count": 339
+        },
+        "GET /auth/emt": {
+          "statuses": {
+            "200": 339
+          },
+          "p95": 7700,
+          "count": 339
+        },
+        "GET /arrivals": {
+          "statuses": {
+            "200": 6102
+          },
+          "p95": 6368,
+          "count": 6102
+        },
+        "GET /stops/nearby": {
+          "statuses": {
+            "200": 81
+          },
+          "p95": 590,
+          "count": 81
+        },
+        "GET /bikes/nearby": {
+          "statuses": {
+            "200": 109
+          },
+          "p95": 932,
+          "count": 109
+        },
+        "GET /stops/:id/detail": {
+          "statuses": {
+            "200": 81
+          },
+          "p95": 7645,
+          "count": 81
+        },
+        "GET /lines/:id/route": {
+          "statuses": {
+            "200": 81
+          },
+          "p95": 1035,
+          "count": 81
+        },
+        "GET /live": {
+          "statuses": {
+            "101": 81
+          },
+          "p95": 4752,
+          "count": 81
+        },
+        "POST /journeys": {
+          "statuses": {
+            "200": 58
+          },
+          "p95": 21990,
+          "count": 58
+        },
+        "GET /places/geocode": {
+          "statuses": {
+            "200": 132
+          },
+          "p95": 10152,
+          "count": 132
+        }
+      },
+      "faults": {},
+      "routes": {
+        "auth-me": {
+          "count": 339,
+          "p95": 4737.0258359
+        },
+        "bikes-saved": {
+          "count": 339,
+          "p95": 4736.982556
+        },
+        "bikes-nearby": {
+          "count": 109,
+          "p95": 822.3212497999984
+        },
+        "auth-config": {
+          "count": 339,
+          "p95": 1407.8659461999948
+        },
+        "detail": {
+          "count": 81,
+          "p95": 7648.55951
+        },
+        "journeys": {
+          "count": 58,
+          "p95": 21910.46447705
+        },
+        "auth-emt": {
+          "count": 339,
+          "p95": 7571.1154199999955
+        },
+        "geocode": {
+          "count": 132,
+          "p95": 9390.633785749984
+        },
+        "arrivals": {
+          "count": 6091,
+          "p95": 6373.9669754999995
+        },
+        "nearby": {
+          "count": 81,
+          "p95": 601.349127
+        },
+        "route": {
+          "count": 81,
+          "p95": 1036.378847
+        },
+        "stops": {
+          "count": 339,
+          "p95": 4737.8578093999995
+        }
+      },
+      "upstream": {
+        "seconds": 255,
+        "calls": {
+          "push": 211,
+          "emt:arrivals": 7265,
+          "supabase:get bus_stops": 339,
+          "supabase:get bike_stations": 339,
+          "supabase:auth-user": 5364,
+          "supabase:get emt_accounts": 4835,
+          "gbfs:station_status": 12,
+          "emt:nearby": 64,
+          "gbfs:station_information": 1,
+          "emt:detail": 63,
+          "emt:route": 150,
+          "routing:table": 44,
+          "emt:incidents": 125,
+          "photon:search": 114,
+          "nominatim:search": 13
+        },
+        "emtTotal": 7667,
+        "distinctArrivalStops": 940,
+        "emtAccountsUsed": 255,
+        "emtBusiestAccount": 116,
+        "failuresInjected": {
+          "http525": 0,
+          "quota98": 0
+        },
+        "pushes": 211,
+        "maxInFlight": 224
+      },
+      "polls": {
+        "stop": 215,
+        "stopErrors": 0,
+        "stopFanOut": 253,
+        "stopFanOutFailed": 0,
+        "bike": 8,
+        "bikeFanOut": 464,
+        "bikeFanOutFailed": 0
+      }
+    },
+    {
+      "riders": 400,
+      "seconds": 255,
+      "thresholdsPassed": false,
+      "requests": 12506,
+      "requestsPerSecond": 49.0427632732524,
+      "failedRate": 0.030865184711338558,
+      "p95": {
+        "all": 18462.613683,
+        "arrivals": 18787.9655808,
+        "journeys": 25001.2693836
+      },
+      "liveBoards": 2481,
+      "access": {
+        "GET /auth/config": {
+          "statuses": {
+            "200": 600
+          },
+          "p95": 4215,
+          "count": 600
+        },
+        "GET /bikes/saved": {
+          "statuses": {
+            "200": 600
+          },
+          "p95": 10457,
+          "count": 600
+        },
+        "GET /stops": {
+          "statuses": {
+            "200": 600
+          },
+          "p95": 10460,
+          "count": 600
+        },
+        "GET /auth/me": {
+          "statuses": {
+            "200": 600
+          },
+          "p95": 10475,
+          "count": 600
+        },
+        "GET /auth/emt": {
+          "statuses": {
+            "200": 549,
+            "502": 51
+          },
+          "p95": 13907,
+          "count": 600
+        },
+        "GET /arrivals": {
+          "statuses": {
+            "200": 8357,
+            "502": 272
+          },
+          "p95": 18780,
+          "count": 8629
+        },
+        "GET /bikes/nearby": {
+          "statuses": {
+            "200": 170
+          },
+          "p95": 7817,
+          "count": 170
+        },
+        "GET /stops/nearby": {
+          "statuses": {
+            "200": 151
+          },
+          "p95": 1193,
+          "count": 151
+        },
+        "GET /places/geocode": {
+          "statuses": {
+            "200": 179
+          },
+          "p95": 16025,
+          "count": 179
+        },
+        "GET /stops/:id/detail": {
+          "statuses": {
+            "200": 145,
+            "502": 6
+          },
+          "p95": 17758,
+          "count": 151
+        },
+        "GET /lines/:id/route": {
+          "statuses": {
+            "200": 144,
+            "502": 1
+          },
+          "p95": 10407,
+          "count": 145
+        },
+        "GET /live": {
+          "statuses": {
+            "101": 151
+          },
+          "p95": 14278,
+          "count": 151
+        },
+        "POST /journeys": {
+          "statuses": {
+            "200": 98,
+            "502": 1
+          },
+          "p95": 36853,
+          "count": 99
+        }
+      },
+      "faults": {},
+      "routes": {
+        "bikes-saved": {
+          "count": 600,
+          "p95": 10396.423581549998
+        },
+        "auth-me": {
+          "count": 600,
+          "p95": 10397.301577399996
+        },
+        "detail": {
+          "count": 151,
+          "p95": 16380.8824675
+        },
+        "geocode": {
+          "count": 179,
+          "p95": 15651.109907999999
+        },
+        "bikes-nearby": {
+          "count": 170,
+          "p95": 7649.416054099993
+        },
+        "auth-emt": {
+          "count": 600,
+          "p95": 13897.793445849999
+        },
+        "stops": {
+          "count": 600,
+          "p95": 10396.571408799997
+        },
+        "auth-config": {
+          "count": 600,
+          "p95": 4008.4609582499897
+        },
+        "route": {
+          "count": 145,
+          "p95": 10408.3080562
+        },
+        "arrivals": {
+          "count": 8613,
+          "p95": 18787.9655808
+        },
+        "nearby": {
+          "count": 151,
+          "p95": 1153.0609755
+        },
+        "journeys": {
+          "count": 97,
+          "p95": 25001.2693836
+        }
+      },
+      "upstream": {
+        "seconds": 255,
+        "calls": {
+          "push": 239,
+          "emt:arrivals": 9349,
+          "supabase:get bike_stations": 600,
+          "supabase:get bus_stops": 600,
+          "supabase:auth-user": 7181,
+          "supabase:get emt_accounts": 6297,
+          "gbfs:station_information": 1,
+          "gbfs:station_status": 13,
+          "emt:nearby": 77,
+          "photon:search": 147,
+          "emt:detail": 117,
+          "routing:table": 74,
+          "emt:route": 161,
+          "emt:incidents": 117,
+          "nominatim:search": 91
+        },
+        "emtTotal": 9821,
+        "distinctArrivalStops": 1280,
+        "emtAccountsUsed": 400,
+        "emtBusiestAccount": 105,
+        "failuresInjected": {
+          "http525": 0,
+          "quota98": 0
+        },
+        "pushes": 239,
+        "maxInFlight": 197
+      },
+      "polls": {
+        "stop": 214,
+        "stopErrors": 0,
+        "stopFanOut": 252,
+        "stopFanOutFailed": 0,
+        "bike": 9,
+        "bikeFanOut": 522,
+        "bikeFanOutFailed": 0
+      }
+    }
+  ]
+}

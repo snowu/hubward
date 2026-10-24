@@ -1,0 +1,210 @@
+{
+  "config": {
+    "levels": [
+      50
+    ],
+    "users": 400,
+    "ramp": "30s",
+    "hold": "2m",
+    "holdSeconds": 120,
+    "session": "90",
+    "alerts": 0.3,
+    "latency": "150-600",
+    "fail525": 0,
+    "quota": 0
+  },
+  "rows": [
+    {
+      "riders": 50,
+      "seconds": 195,
+      "thresholdsPassed": false,
+      "requests": 1776,
+      "requestsPerSecond": 9.107609521389985,
+      "failedRate": 0.02252252252252252,
+      "p95": {
+        "all": 1530.9634445000002,
+        "arrivals": 1841.4431496499901,
+        "journeys": 4290.7534433499995
+      },
+      "liveBoards": 221,
+      "access": {
+        "GET /auth/config": {
+          "statuses": {
+            "200": 17
+          },
+          "p95": 39,
+          "count": 17
+        },
+        "GET /bikes/saved": {
+          "statuses": {
+            "200": 17
+          },
+          "p95": 49,
+          "count": 17
+        },
+        "GET /auth/me": {
+          "statuses": {
+            "200": 17
+          },
+          "p95": 53,
+          "count": 17
+        },
+        "GET /stops": {
+          "statuses": {
+            "200": 17
+          },
+          "p95": 64,
+          "count": 17
+        },
+        "GET /auth/emt": {
+          "statuses": {
+            "200": 17
+          },
+          "p95": 84,
+          "count": 17
+        },
+        "GET /arrivals": {
+          "statuses": {
+            "200": 62
+          },
+          "p95": 627,
+          "count": 62
+        },
+        "GET /bikes/nearby": {
+          "statuses": {
+            "200": 6
+          },
+          "p95": 61,
+          "count": 6
+        },
+        "GET /stops/nearby": {
+          "statuses": {
+            "200": 2
+          },
+          "p95": 181,
+          "count": 2
+        },
+        "GET /stops/:id/detail": {
+          "statuses": {
+            "200": 2
+          },
+          "p95": 482,
+          "count": 2
+        },
+        "GET /lines/:id/route": {
+          "statuses": {
+            "200": 2
+          },
+          "p95": 394,
+          "count": 2
+        },
+        "GET /live": {
+          "statuses": {
+            "101": 2
+          },
+          "p95": 50,
+          "count": 2
+        },
+        "POST /journeys": {
+          "statuses": {
+            "200": 1
+          },
+          "p95": 3626,
+          "count": 1
+        }
+      },
+      "faults": {
+        "✘ [ERROR] Uncaught Error: The Workers runtime canceled this request because it detected that your Worker's code had hung and would never gen": 30,
+        "✘ [ERROR] Uncaught Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and ot": 20
+      },
+      "routes": {
+        "nearby": {
+          "count": 14,
+          "p95": 126.52650499999997
+        },
+        "auth-me": {
+          "count": 65,
+          "p95": 107.7064362
+        },
+        "journeys": {
+          "count": 8,
+          "p95": 4290.7534433499995
+        },
+        "detail": {
+          "count": 14,
+          "p95": 528.9060168999999
+        },
+        "stops": {
+          "count": 65,
+          "p95": 108.25770920000001
+        },
+        "bikes-nearby": {
+          "count": 24,
+          "p95": 60.707825249999985
+        },
+        "arrivals": {
+          "count": 1344,
+          "p95": 1841.4431496499901
+        },
+        "auth-emt": {
+          "count": 65,
+          "p95": 180.30314239999987
+        },
+        "auth-config": {
+          "count": 65,
+          "p95": 66.46148179999999
+        },
+        "route": {
+          "count": 14,
+          "p95": 426.22635345
+        },
+        "bikes-saved": {
+          "count": 65,
+          "p95": 108.0767178
+        },
+        "geocode": {
+          "count": 33,
+          "p95": 574.6537481999999
+        }
+      },
+      "upstream": {
+        "seconds": 195,
+        "calls": {
+          "emt:arrivals": 1801,
+          "push": 188,
+          "supabase:get bike_stations": 65,
+          "supabase:auth-user": 1292,
+          "supabase:get bus_stops": 65,
+          "supabase:get emt_accounts": 1186,
+          "emt:nearby": 34,
+          "gbfs:station_status": 8,
+          "gbfs:station_information": 1,
+          "routing:table": 8,
+          "emt:detail": 13,
+          "emt:route": 77,
+          "emt:incidents": 53,
+          "photon:search": 31
+        },
+        "emtTotal": 1978,
+        "distinctArrivalStops": 313,
+        "emtAccountsUsed": 149,
+        "emtBusiestAccount": 97,
+        "failuresInjected": {
+          "http525": 0,
+          "quota98": 0
+        },
+        "pushes": 188,
+        "maxInFlight": 142
+      },
+      "polls": {
+        "stop": 3,
+        "stopErrors": 0,
+        "stopFanOut": 3,
+        "stopFanOutFailed": 0,
+        "bike": 0,
+        "bikeFanOut": 0,
+        "bikeFanOutFailed": 0
+      }
+    }
+  ]
+}

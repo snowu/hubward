@@ -130,7 +130,9 @@ try {
   ]);
   await measure("Live map socket, 2 viewers, 20 s", async () => {
     const open = (u) => new Promise((resolveSocket) => {
-      const ws = new WebSocket(`${WS}/live?stop=${stopId}`, ["hubwise", u.token]);
+      // The worker checks Origin; Node's WebSocket (undici) takes headers as an extension.
+      const ws = new WebSocket(`${WS}/live?stop=${stopId}`,
+        { protocols: ["hubwise", u.token], headers: { origin: "https://snowu.github.io" } });
       let boards = 0;
       ws.onmessage = () => { boards++; };
       ws.onerror = () => resolveSocket("error");

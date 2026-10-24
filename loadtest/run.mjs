@@ -70,6 +70,17 @@ function start(command, argv, options) {
   }
   return child;
 }
+/** Run a command to completion without blocking this process: the worker's
+ *  log pipe must keep draining, or wrangler stalls on its own stdout and the
+ *  worker under test with it. (execFileSync here once did exactly that.) */
+function run(command, argv, options) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(command, argv, { ...options, stdio: "inherit" });
+    child.on("error", rejectRun);
+    child.on("exit", (status) => resolveRun(status));
+  });
+}
+
 function stop(child) {
   try { process.kill(-child.pid, "SIGTERM"); } catch { /* already gone */ }
 }
@@ -105,29 +116,22 @@ async function level(riders) {
   try {
     await ready(`${FAKE}/__stats`, fake, "fake upstream");
     await ready(`${WORKER}/auth/config`, worker, "worker");
-    try {
-      execFileSync("node", ["seed.mjs", "--worker", WORKER, "--concurrency", String(args["seed-concurrency"] ?? 20)],
-        { cwd: HERE, stdio: "inherit" });
-    } catch {
-      // A few seed calls timing out on a busy local runtime leaves a few users
-      // without alerts; the level is still worth running. seed.mjs said how many.
-      console.warn("seeding had failures; continuing");
-    }
+    const seeded = await run("node", ["seed.mjs", "--worker", WORKER, "--concurrency", String(args["seed-concurrency"] ?? 20)],
+      { cwd: HERE });
+    // A few seed calls timing out on a busy local runtime leaves a few users
+    // without alerts; the level is still worth running. seed.mjs said how many.
+    if (seeded !== 0) console.warn("seeding had failures; continuing");
     // Count only the load itself, not seeding.
     await fetch(`${FAKE}/__reset`, { method: "POST" });
     const pollsBefore = worker.lines.length;
     const summaryFile = resolve(HERE, `.load/k6-${riders}.json`);
     const started = Date.now();
-    let thresholdsPassed = true;
-    try {
-      execFileSync(K6, ["run", "--quiet", "--summary-export", summaryFile,
-        "-e", `WORKER=${WORKER}`, "-e", `RIDERS=${riders}`, "-e", `RAMP=${RAMP}`, "-e", `HOLD=${HOLD}`,
-        "-e", `SESSION=${SESSION}`, "k6.js"], { cwd: HERE, stdio: "inherit" });
-    } catch (error) {
-      // 99: a threshold was crossed. That is a result, not a failed run.
-      if (error.status !== 99) throw error;
-      thresholdsPassed = false;
-    }
+    const k6Status = await run(K6, ["run", "--quiet", "--summary-export", summaryFile,
+      "-e", `WORKER=${WORKER}`, "-e", `RIDERS=${riders}`, "-e", `RAMP=${RAMP}`, "-e", `HOLD=${HOLD}`,
+      "-e", `SESSION=${SESSION}`, "k6.js"], { cwd: HERE });
+    // 99: a threshold was crossed. That is a result, not a failed run.
+    if (k6Status !== 0 && k6Status !== 99) throw new Error(`k6 exited with ${k6Status}`);
+    const thresholdsPassed = k6Status === 0;
     const elapsed = (Date.now() - started) / 1000;
     const fakeStats = await (await fetch(`${FAKE}/__stats`)).json();
     const polls = worker.lines.slice(pollsBefore)
@@ -186,6 +190,7 @@ async function level(riders) {
       },
     };
   } finally {
+    writeFileSync(resolve(HERE, `.load/worker-${riders}.log`), worker.lines.join("\n"));
     stop(worker);
     stop(fake);
     await sleep(1500);
