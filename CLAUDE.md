@@ -138,7 +138,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 216 tests, no network
+npm test          # web smoke check, then vitest under workerd; 219 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -901,6 +901,17 @@ is most stale), and manually per-card or all at once.
    call as the hubs and drawn as the first card; "Save as hub" opens the hub
    editor prefilled. It is kept per user in localStorage for 12 hours, so the
    card is still there when you look again at the next corner.
+
+   **The box searches as you type** (300ms pause, 3+ letters; a slower answer
+   to an older prefix is dropped), and Go/Enter takes the top result once it
+   is showing. `/places/geocode` asks **Photon** first: it matches prefixes
+   and forgives typos ("calle alcal"), where Nominatim, a whole-word address
+   parser, found nothing until a name was typed in full. Nominatim answers
+   only when Photon is down or empty. Street-sign abbreviations (`c/`, `avda`,
+   `pza`, `pº`, `gta`, `ctra`) are spelled out first, and results are biased to
+   the rider's position rounded to ~1km, which is also part of the cache key
+   (`geocode-v2/`, 30 days) — every prefix typed is a request, so the edge
+   cache is what keeps both public services' fair-use limits comfortable.
 
    **Or press and hold the map** (right-click on a desktop): a "Dropped pin"
    popup offers "Go here", which sets the same destination, switches to the

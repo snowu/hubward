@@ -235,32 +235,117 @@ async function cachedNearby(requestUrl, emt, lat, lon, radius, ctx, caller = "ma
     () => getNearbyStops(emt, { lat, lon, radius }, caller), ctx, emt, "nearby");
 }
 
-async function geocodeMadrid(requestUrl, query, ctx) {
-  const normalized = String(query ?? "").trim().replace(/\s+/g, " ");
+// Madrid's municipality, with a little margin: the same box both geocoders get.
+const MADRID_BOX = { west: -3.888, south: 40.312, east: -3.517, north: 40.643 };
+
+/** Street-sign abbreviations, spelled out. Photon matches words, so "c/
+ *  alcala" has to become "calle alcala" before it can find Calle de Alcalá. */
+const ADDRESS_ABBREVIATIONS = [
+  [/(^|\s)c\s*\/\s*/gi, "$1calle "],
+  [/(^|\s)(av|avd|avda)\.?(?=\s)/gi, "$1avenida"],
+  [/(^|\s)(pza|pl)\.?(?=\s)/gi, "$1plaza"],
+  [/(^|\s)(p[º°]|pso)\.?(?=\s)/gi, "$1paseo"],
+  [/(^|\s)(gta|glta)\.?(?=\s)/gi, "$1glorieta"],
+  [/(^|\s)(ctra)\.?(?=\s)/gi, "$1carretera"],
+];
+
+export function normalizeAddressQuery(query) {
+  let text = String(query ?? "").trim().replace(/\s+/g, " ");
+  for (const [pattern, replacement] of ADDRESS_ABBREVIATIONS) text = text.replace(pattern, replacement);
+  return text.replace(/\s+/g, " ").trim();
+}
+
+const GEOCODER_HEADERS = {
+  "user-agent": "hubward/1.0 (https://snowu.github.io/hubward/)",
+  referer: "https://snowu.github.io/hubward/",
+  accept: "application/json",
+};
+
+/** Photon: OpenStreetMap search built for search-as-you-type. It matches
+ *  prefixes and forgives typos ("calle alcal", "atoxa"), which Nominatim, a
+ *  whole-word address parser, does not — that is why typing a street name
+ *  felt broken. */
+async function photonSearch(query, bias) {
+  const target = new URL("https://photon.komoot.io/api/");
+  target.search = new URLSearchParams({
+    q: query, limit: "8",
+    bbox: `${MADRID_BOX.west},${MADRID_BOX.south},${MADRID_BOX.east},${MADRID_BOX.north}`,
+    ...(bias ? { lat: String(bias.lat), lon: String(bias.lon) } : {}),
+  }).toString();
+  const response = await fetch(target, { headers: GEOCODER_HEADERS });
+  if (!response.ok) throw new EmtError("upstream", `address search HTTP ${response.status}`);
+  const body = await response.json();
+  const seen = new Set();
+  return (body.features ?? []).map((feature) => {
+    const p = feature.properties ?? {};
+    const [lon, lat] = feature.geometry?.coordinates ?? [];
+    const street = [p.street, p.housenumber].filter(Boolean).join(" ");
+    const title = p.name || street;
+    const parts = [title, p.name && street && street !== p.name ? street : null,
+      p.district ?? p.locality, p.city].filter(Boolean);
+    return {
+      displayName: [...new Set(parts.map(String))].join(", "),
+      lat: Number(lat), lon: Number(lon), type: p.type ?? p.osm_value ?? null,
+    };
+  }).filter((row) => {
+    // One street comes back as several OSM ways; one row per name and area.
+    if (!row.displayName || !Number.isFinite(row.lat) || !Number.isFinite(row.lon)) return false;
+    if (seen.has(row.displayName)) return false;
+    seen.add(row.displayName);
+    return true;
+  });
+}
+
+async function nominatimSearch(query) {
+  const target = new URL("https://nominatim.openstreetmap.org/search");
+  target.search = new URLSearchParams({
+    q: `${query}, Madrid`, format: "jsonv2", addressdetails: "1",
+    countrycodes: "es", bounded: "1",
+    viewbox: `${MADRID_BOX.west},${MADRID_BOX.north},${MADRID_BOX.east},${MADRID_BOX.south}`, limit: "6",
+  }).toString();
+  const response = await fetch(target, { headers: GEOCODER_HEADERS });
+  if (!response.ok) throw new EmtError("upstream", `address search HTTP ${response.status}`);
+  const rows = await response.json();
+  return rows.map((row) => ({
+    displayName: String(row.display_name ?? ""),
+    lat: Number(row.lat), lon: Number(row.lon), type: row.type ?? null,
+  })).filter((row) => row.displayName && Number.isFinite(row.lat) && Number.isFinite(row.lon));
+}
+
+/** Places in Madrid matching what the rider has typed so far.
+ *
+ * Photon first, for its fuzzy prefix matching; Nominatim only when Photon is
+ * down or finds nothing, since it still knows some full addresses Photon
+ * ranks badly. `near` biases results towards the rider and is rounded to
+ * ~1km so nearby riders share cache entries — the page searches as you type,
+ * so every prefix is a request and the cache is what keeps the public
+ * services' fair-use limits comfortable.
+ */
+async function geocodeMadrid(requestUrl, query, ctx, near = null) {
+  const normalized = normalizeAddressQuery(query);
   if (normalized.length < 3 || normalized.length > 120) {
     throw new EmtError("not_found", "address query must be 3–120 characters");
   }
-  return edgeCachedJson(requestUrl, `geocode/${encodeURIComponent(normalized.toLocaleLowerCase("es"))}`,
-    GEOCODE_CACHE_TTL, async () => {
-      const target = new URL("https://nominatim.openstreetmap.org/search");
-      target.search = new URLSearchParams({
-        q: `${normalized}, Madrid`, format: "jsonv2", addressdetails: "1",
-        countrycodes: "es", bounded: "1", viewbox: "-3.888,40.643,-3.517,40.312", limit: "6",
-      }).toString();
-      const response = await fetch(target, {
-        headers: {
-          "user-agent": "hubward/1.0 (https://snowu.github.io/hubward/)",
-          referer: "https://snowu.github.io/hubward/",
-          accept: "application/json",
-        },
-      });
-      if (!response.ok) throw new EmtError("upstream", `address search HTTP ${response.status}`);
-      const rows = await response.json();
-      return rows.map((row) => ({
-        displayName: String(row.display_name ?? ""),
-        lat: Number(row.lat), lon: Number(row.lon), type: row.type ?? null,
-      })).filter((row) => row.displayName && Number.isFinite(row.lat) && Number.isFinite(row.lon));
-    }, ctx);
+  let bias = null;
+  try {
+    if (near) {
+      const point = madridPoint(near);
+      bias = { lat: Number(point.lat.toFixed(2)), lon: Number(point.lon.toFixed(2)) };
+    }
+  } catch {
+    // Outside Madrid, or not given: search unbiased.
+  }
+  const key = `geocode-v2/${encodeURIComponent(normalized.toLocaleLowerCase("es"))}` +
+    (bias ? `/${bias.lat},${bias.lon}` : "");
+  return edgeCachedJson(requestUrl, key, GEOCODE_CACHE_TTL, async () => {
+    let found = [];
+    try {
+      found = await photonSearch(normalized, bias);
+    } catch {
+      // Fall through to Nominatim.
+    }
+    return found.length ? found : nominatimSearch(normalized);
+  }, ctx);
 }
 
 /** The street a dropped map pin stands on, so the card it makes has a name.
@@ -555,7 +640,8 @@ export default {
       }
       if (pathname === "/places/geocode" && method === "GET") {
         await authenticatedUser(env, request);
-        return json(await geocodeMadrid(request.url, url.searchParams.get("q"), ctx), env);
+        return json(await geocodeMadrid(request.url, url.searchParams.get("q"), ctx,
+          url.searchParams.has("lat") ? { lat: url.searchParams.get("lat"), lon: url.searchParams.get("lon") } : null), env);
       }
       if (pathname === "/places/reverse" && method === "GET") {
         await authenticatedUser(env, request);

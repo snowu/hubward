@@ -432,18 +432,62 @@ describe("GET /places/geocode", () => {
     expect((await call("/places/geocode?q=Orense%201")).status).toBe(401);
   });
 
-  it("returns only normalized Madrid search results", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+  const geocoders = ({ photon = { features: [] }, nominatim = [], photonStatus = 200 }) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       if (String(url).includes("/auth/v1/user")) return new Response(JSON.stringify({
         id: "user-id", email: "user@example.com",
       }));
-      return new Response(JSON.stringify([{
-        display_name: "Calle de Orense, 1, Madrid, España",
-        lat: "40.4501", lon: "-3.6921", type: "house", private: "discard",
-      }]));
+      if (String(url).includes("photon")) return new Response(JSON.stringify(photon), { status: photonStatus });
+      return new Response(JSON.stringify(nominatim));
     });
-    const res = await call("/places/geocode?q=Orense%201", userAuth);
+  const photonStreet = (name, lon, lat, extra = {}) => ({
+    type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] },
+    properties: { name, city: "Madrid", type: "street", osm_id: 1, ...extra },
+  });
+
+  it("finds a street from a partial name, once per street and district", async () => {
+    const spy = geocoders({ photon: { type: "FeatureCollection", features: [
+      photonStreet("Calle de Alcalá", -3.69, 40.42, { district: "Centro" }),
+      photonStreet("Calle de Alcalá", -3.691, 40.421, { district: "Centro" }),
+      photonStreet("Calle de Alcalá", -3.64, 40.43, { district: "Salamanca" }),
+      photonStreet("Museo del Prado", -3.692, 40.4138, { street: "Paseo del Prado", type: "house" }),
+    ] } });
+    const res = await call("/places/geocode?q=calle%20alcal", userAuth);
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      { displayName: "Calle de Alcalá, Centro, Madrid", lat: 40.42, lon: -3.69, type: "street" },
+      { displayName: "Calle de Alcalá, Salamanca, Madrid", lat: 40.43, lon: -3.64, type: "street" },
+      { displayName: "Museo del Prado, Paseo del Prado, Madrid", lat: 40.4138, lon: -3.692, type: "house" },
+    ]);
+    const lookups = spy.mock.calls.map(([url]) => String(url)).filter((url) => !url.includes("/auth/"));
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]).toContain("photon.komoot.io");
+    expect(lookups[0]).toContain("bbox=-3.888%2C40.312%2C-3.517%2C40.643");
+  });
+
+  it("spells out street-sign abbreviations before searching", async () => {
+    const spy = geocoders({ photon: { features: [photonStreet("Calle de Orense", -3.69, 40.45)] } });
+    await call("/places/geocode?q=c%2Forense", userAuth);
+    const [url] = spy.mock.calls.find(([candidate]) => String(candidate).includes("photon"));
+    expect(new URL(String(url)).searchParams.get("q")).toBe("calle orense");
+  });
+
+  it("biases towards the rider, rounded so nearby riders share the cache", async () => {
+    const spy = geocoders({ photon: { features: [photonStreet("Calle de Atocha", -3.70, 40.41)] } });
+    await call("/places/geocode?q=atocha%20bias&lat=40.41681&lon=-3.70379", userAuth);
+    await call("/places/geocode?q=atocha%20bias&lat=40.41702&lon=-3.70401", userAuth);
+    const lookups = spy.mock.calls.filter(([url]) => String(url).includes("photon"));
+    expect(lookups).toHaveLength(1);
+    const params = new URL(String(lookups[0][0])).searchParams;
+    expect([params.get("lat"), params.get("lon")]).toEqual(["40.42", "-3.7"]);
+  });
+
+  it("falls back to Nominatim when Photon is down", async () => {
+    const spy = geocoders({ photonStatus: 503, nominatim: [{
+      display_name: "Calle de Orense, 1, Madrid, España",
+      lat: "40.4501", lon: "-3.6921", type: "house", private: "discard",
+    }] });
+    const res = await call("/places/geocode?q=Orense%201", userAuth);
     expect(await res.json()).toEqual([{
       displayName: "Calle de Orense, 1, Madrid, España",
       lat: 40.4501, lon: -3.6921, type: "house",
