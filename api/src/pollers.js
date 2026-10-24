@@ -102,7 +102,7 @@ export class BikeFeed extends Poller {
     let status;
     try {
       // Deliberately bypasses the page's 45 s cache, and refuses a stale feed.
-      status = await getBikeStationStatus({ forTracking: true });
+      status = await getBikeStationStatus(this.env, { forTracking: true });
     } catch (error) {
       const message = String(error?.message ?? error);
       this.log({ error: message.slice(0, 200), ...await this.fanOut((stub) => stub.onBikes({ error: message, fetchedAt: now })) });

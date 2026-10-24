@@ -202,6 +202,12 @@ describe("GBFS station feeds", () => {
     });
   });
 
+  it("reads from GBFS_BASE when it is set", async () => {
+    const spy = mockFetch(gbfsStatus);
+    await getBikeStationStatus({ GBFS_BASE: "http://fake.test/gbfs" });
+    expect(String(spy.mock.calls[0][0])).toBe("http://fake.test/gbfs/station_status");
+  });
+
   it("treats a station that is not renting as such", async () => {
     mockFetch({
       data: {

@@ -59,6 +59,16 @@ describe("the shared login's token", () => {
     expect(init.body).toBeUndefined();
   });
 
+  it("sends every call to EMT_BASE when it is set", async () => {
+    const spy = mockEmt();
+    await getArrivals(emtClient({ ...env, EMT_BASE: "http://fake.test/" }), "1234");
+    const urls = spy.mock.calls.map(([url]) => String(url));
+    expect(urls).toEqual([
+      "http://fake.test/v1/mobilitylabs/user/login/",
+      "http://fake.test/v2/transport/busemtmad/stops/1234/arrives/",
+    ]);
+  });
+
   it("caches the token in KV so a second call does not log in", async () => {
     const spy = mockEmt();
     await getArrivals(emt, "1234");

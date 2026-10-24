@@ -7,6 +7,7 @@ import { emtFetch } from "./emt.js";
 // city-wide are flagged broken. GBFS also says whether a station is renting
 // or accepting returns at all. No CORS headers, so the worker proxies it.
 const GBFS = "https://madrid.publicbikesystem.net/customer/ube/gbfs/v1/en";
+// GBFS_BASE replaces it for the load test (loadtest/). Unset in production.
 
 /** One BiciMAD station, trimmed to what the page draws.
  *
@@ -37,16 +38,16 @@ function parseStation(raw) {
   };
 }
 
-async function gbfs(path) {
-  const res = await emtFetch(`${GBFS}/${path}`, { method: "GET" });
+async function gbfs(env, path) {
+  const res = await emtFetch(`${env?.GBFS_BASE || GBFS}/${path}`, { method: "GET" });
   if (!res.ok) throw new EmtError("upstream", `GBFS ${path} HTTP ${res.status}`);
   return res.json();
 }
 
 /** Names, addresses and positions. These change when a station is built, so
  *  the caller holds them for a day. */
-export async function getBikeStationInfo() {
-  const body = await gbfs("station_information");
+export async function getBikeStationInfo(env) {
+  const body = await gbfs(env, "station_information");
   const stations = body.data?.stations ?? [];
   if (stations.length === 0) throw new EmtError("upstream", "GBFS sent no stations");
   return {
@@ -66,8 +67,8 @@ export async function getBikeStationInfo() {
 
 /** Live counts. `num_bikes_available` already excludes broken bikes, which is
  *  the whole reason for preferring this feed. */
-export async function getBikeStationStatus({ forTracking = false } = {}) {
-  const body = await gbfs("station_status");
+export async function getBikeStationStatus(env, { forTracking = false } = {}) {
+  const body = await gbfs(env, "station_status");
   if (forTracking && body.last_updated != null && Date.now() / 1000 - Number(body.last_updated) > 120) {
     throw new EmtError("upstream", "GBFS status is stale");
   }
