@@ -65,6 +65,7 @@ api/                 Cloudflare Worker. Holds EMT and optional owner MPass crede
   wrangler.toml      name, bindings, ALLOWED_ORIGIN, PLANNER_TIER. No secrets.
   vitest.config.js   fake credential bindings for tests
 supabase/            bus_stops.sql, bike_stations.sql — run by hand, once
+loadtest/            k6 riders against a local worker, every upstream faked
 .github/workflows/pages.yml    deploys web/ and stamps the cache-buster
 ```
 
@@ -325,6 +326,16 @@ in a PR comment as `<img src="…" width="320">`. The repo is public, so those
 URLs render without sign-in. Take them at 360px wide, in the style the change
 was reported in; the page can be served locally for layout, but cannot sign
 in (the worker only allows `ALLOWED_ORIGIN`).
+
+**Load is tested against fakes, never against EMT.** `node loadtest/run.mjs
+--riders 50,200` runs k6 riders at a local `wrangler dev` whose upstreams
+(`EMT_BASE`, `GBFS_BASE`, `PHOTON_BASE`, `NOMINATIM_BASE`, `ROUTING_BASE`,
+`SUPABASE_URL`, `PUSH_SINK`) all point at `loadtest/fake-upstream.mjs`, which
+counts every call; `node loadtest/probe.mjs` prices one action at a time.
+The counts carry over to Cloudflare; local latencies do not. Two things it
+taught: never `execFileSync` beside a piped `wrangler dev` (its stdout fills
+and the worker stalls), and never let one request await another request's
+promise (`src/shared-load.js`). Results: `docs/load-test-results.md`.
 
 ## Data source
 
