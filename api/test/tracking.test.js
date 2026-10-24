@@ -6,7 +6,7 @@ import {
 } from "../src/tracking-rules.js";
 import { validateWatch, watchLimits, validLocation, DEVICE_PAUSE, DEVICE_FORGET } from "../src/tracking.js";
 import { bikeFeed, stopPoller } from "../src/pollers.js";
-import { validateSubscription } from "../src/push.js";
+import { sendPush, validateSubscription } from "../src/push.js";
 import worker from "../src/index.js";
 
 const busWatch = { kind: "bus", targetId: "5138", line: "70", destination: "PLAZA", label: "Home" };
@@ -542,6 +542,14 @@ describe("tracking API validation", () => {
       const response = await worker.fetch(new Request("https://worker/tracking", { method }), env, createExecutionContext());
       expect(response.status).toBe(401);
     }
+  });
+  it("delivers to PUSH_SINK instead of the push service when it is set", async () => {
+    const { config, subscription } = await credentials();
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 201 }));
+    expect(await sendPush({ ...config, PUSH_SINK: "http://fake.test" }, subscription, { title: "hi" })).toBe(201);
+    expect(String(spy.mock.calls[0][0]))
+      .toBe(`http://fake.test/push?to=${encodeURIComponent(subscription.endpoint)}`);
+    vi.restoreAllMocks();
   });
   it("rejects arbitrary callback URLs and malformed subscriptions", () => {
     expect(() => validateSubscription({ endpoint: "https://example.com" })).toThrow();

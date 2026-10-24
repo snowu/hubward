@@ -36,7 +36,13 @@ export async function sendPush(env, subscription, payload, { ttl = 120, topic } 
   });
   // Workers reject redirect: "error". "manual" hands a redirect back as a 3xx,
   // which the caller already treats as a failed delivery: never follow one.
-  const response = await fetch(subscription.endpoint, {
+  // PUSH_SINK delivers every notification there instead: the load test's fake
+  // upstream (loadtest/). Unset in production. It is operator config, so the
+  // check above still keeps subscriptions to the browser vendors' services.
+  const target = env.PUSH_SINK
+    ? `${env.PUSH_SINK}/push?to=${encodeURIComponent(subscription.endpoint)}`
+    : subscription.endpoint;
+  const response = await fetch(target, {
     ...details, redirect: "manual", signal: AbortSignal.timeout(10_000),
   });
   await response.body?.cancel();

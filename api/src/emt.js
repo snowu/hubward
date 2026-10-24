@@ -3,6 +3,9 @@ import { emtEndpoint, recordUpstreamMetric } from "./metrics.js";
 import { sharedLoad } from "./shared-load.js";
 
 const BASE = "https://openapi.emtmadrid.es/";
+// EMT_BASE points every EMT call somewhere else: the load test's fake
+// upstream (loadtest/). Unset in production.
+const base = (env) => env?.EMT_BASE || BASE;
 const TOKEN_KEY = "emt:token";
 
 /** Tokens in isolate memory, one entry per Account: `{token, expiresAt}`. */
@@ -59,7 +62,7 @@ export function emtClient(env, { account = null, who = "background" } = {}) {
     async call(path, { method = "GET", body, ok = ["00"], what = "request", caller = "" } = {}) {
       const owner = await client.account();
       const send = async (token) => {
-        const res = await emtFetch(`${BASE}${path}`, {
+        const res = await emtFetch(`${base(client.env)}${path}`, {
           method,
           headers: { accessToken: token, ...(body ? { "content-type": "application/json" } : {}) },
           ...(body ? { body: JSON.stringify(body) } : {}),
@@ -142,7 +145,7 @@ export async function emtFetch(url, init, emt = null, caller = "") {
 }
 
 async function login(emt, slot) {
-  const res = await emtFetch(`${BASE}v1/mobilitylabs/user/login/`, {
+  const res = await emtFetch(`${base(emt.env)}v1/mobilitylabs/user/login/`, {
     method: "GET",
     headers: { email: slot.email, password: slot.password },
   }, emt);

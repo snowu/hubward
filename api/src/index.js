@@ -194,9 +194,9 @@ async function cachedIncidents(requestUrl, emt, line, ctx) {
     () => getLineIncidents(emt, line), ctx, emt, "incidents");
 }
 
-async function cachedBikeInfo(requestUrl, ctx) {
+async function cachedBikeInfo(requestUrl, ctx, env) {
   return edgeCachedJson(requestUrl, "bike-info", BIKE_INFO_CACHE_TTL,
-    () => getBikeStationInfo(), ctx);
+    () => getBikeStationInfo(env), ctx);
 }
 
 /** Live stations, preferring the operator's own feed.
@@ -209,7 +209,7 @@ async function cachedBikeInfo(requestUrl, ctx) {
 async function cachedBikeStations(requestUrl, emt, ctx) {
   return edgeCachedJson(requestUrl, "bikes", BIKES_CACHE_TTL, async () => {
     try {
-      const [info, status] = await Promise.all([cachedBikeInfo(requestUrl, ctx), getBikeStationStatus()]);
+      const [info, status] = await Promise.all([cachedBikeInfo(requestUrl, ctx, emt.env), getBikeStationStatus(emt.env)]);
       return { ...mergeBikeStations(info, status), source: "gbfs" };
     } catch {
       return { ...(await getBikeStations(emt)), source: "mobilitylabs" };
@@ -248,6 +248,12 @@ export function normalizeAddressQuery(query) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// The public services behind address search and walking times. The
+// *_BASE vars replace them for the load test (loadtest/); unset in production.
+const PHOTON = "https://photon.komoot.io";
+const NOMINATIM = "https://nominatim.openstreetmap.org";
+const ROUTING = "https://routing.openstreetmap.de";
+
 const GEOCODER_HEADERS = {
   "user-agent": "hubward/1.0 (https://snowu.github.io/hubward/)",
   referer: "https://snowu.github.io/hubward/",
@@ -258,8 +264,8 @@ const GEOCODER_HEADERS = {
  *  prefixes and forgives typos ("calle alcal", "atoxa"), which Nominatim, a
  *  whole-word address parser, does not — that is why typing a street name
  *  felt broken. */
-async function photonSearch(query, bias) {
-  const target = new URL("https://photon.komoot.io/api/");
+async function photonSearch(env, query, bias) {
+  const target = new URL(`${env.PHOTON_BASE || PHOTON}/api/`);
   target.search = new URLSearchParams({
     q: query, limit: "8",
     bbox: `${MADRID_BOX.west},${MADRID_BOX.south},${MADRID_BOX.east},${MADRID_BOX.north}`,
@@ -290,8 +296,8 @@ async function photonSearch(query, bias) {
   });
 }
 
-async function nominatimSearch(query) {
-  const target = new URL("https://nominatim.openstreetmap.org/search");
+async function nominatimSearch(env, query) {
+  const target = new URL(`${env.NOMINATIM_BASE || NOMINATIM}/search`);
   target.search = new URLSearchParams({
     q: `${query}, Madrid`, format: "jsonv2", addressdetails: "1",
     countrycodes: "es", bounded: "1",
@@ -315,7 +321,7 @@ async function nominatimSearch(query) {
  * so every prefix is a request and the cache is what keeps the public
  * services' fair-use limits comfortable.
  */
-async function geocodeMadrid(requestUrl, query, ctx, near = null) {
+async function geocodeMadrid(env, requestUrl, query, ctx, near = null) {
   const normalized = normalizeAddressQuery(query);
   if (normalized.length < 3 || normalized.length > 120) {
     throw new EmtError("not_found", "address query must be 3–120 characters");
@@ -334,11 +340,11 @@ async function geocodeMadrid(requestUrl, query, ctx, near = null) {
   return edgeCachedJson(requestUrl, key, GEOCODE_CACHE_TTL, async () => {
     let found = [];
     try {
-      found = await photonSearch(normalized, bias);
+      found = await photonSearch(env, normalized, bias);
     } catch {
       // Fall through to Nominatim.
     }
-    return found.length ? found : nominatimSearch(normalized);
+    return found.length ? found : nominatimSearch(env, normalized);
   }, ctx);
 }
 
@@ -348,11 +354,11 @@ async function geocodeMadrid(requestUrl, query, ctx, near = null) {
  * pressed twice should cost Nominatim one call, not two (its usage policy is
  * one request a second for everyone using this worker).
  */
-async function reverseGeocodeMadrid(requestUrl, value, ctx) {
+async function reverseGeocodeMadrid(env, requestUrl, value, ctx) {
   const { lat, lon } = madridPoint(value);
   const key = `reverse/${lat.toFixed(4)},${lon.toFixed(4)}`;
   return edgeCachedJson(requestUrl, key, GEOCODE_CACHE_TTL, async () => {
-    const target = new URL("https://nominatim.openstreetmap.org/reverse");
+    const target = new URL(`${env.NOMINATIM_BASE || NOMINATIM}/reverse`);
     target.search = new URLSearchParams({
       lat: lat.toFixed(4), lon: lon.toFixed(4), format: "jsonv2", addressdetails: "1", zoom: "18",
     }).toString();
@@ -386,7 +392,7 @@ function madridPoint(value) {
   return { lat, lon };
 }
 
-async function walkingMatrix(requestUrl, body, ctx) {
+async function walkingMatrix(env, requestUrl, body, ctx) {
   const origin = madridPoint(body?.origin);
   if (!Array.isArray(body?.destinations) || body.destinations.length < 1 || body.destinations.length > 25) {
     throw new EmtError("not_found", "destinations must contain 1–25 coordinates");
@@ -395,7 +401,7 @@ async function walkingMatrix(requestUrl, body, ctx) {
   const rounded = [origin, ...destinations]
     .map(({ lon, lat }) => `${lon.toFixed(5)},${lat.toFixed(5)}`);
   return edgeCachedJson(requestUrl, `walking/${rounded.join(";")}`, WALKING_CACHE_TTL, async () => {
-    const target = `https://routing.openstreetmap.de/routed-foot/table/v1/driving/${rounded.join(";")}` +
+    const target = `${env.ROUTING_BASE || ROUTING}/routed-foot/table/v1/driving/${rounded.join(";")}` +
       "?sources=0&annotations=distance,duration";
     const response = await fetch(target, {
       headers: {
@@ -510,7 +516,7 @@ function plannerSources(requestUrl, emt, ctx) {
     board: (stopId) => cachedPlannerArrivals(requestUrl, emt, stopId, ctx),
     route: (line) => cachedRoute(requestUrl, emt, line, ctx),
     incidents: (line) => cachedIncidents(requestUrl, emt, line, ctx),
-    walking: (body) => walkingMatrix(requestUrl, body, ctx),
+    walking: (body) => walkingMatrix(emt.env, requestUrl, body, ctx),
     // The planner may answer before a cold read lands; waitUntil keeps the
     // read alive so it still fills the cache for the next plan.
     bikes: () => {
@@ -640,12 +646,12 @@ export default {
       }
       if (pathname === "/places/geocode" && method === "GET") {
         await authenticatedUser(env, request);
-        return json(await geocodeMadrid(request.url, url.searchParams.get("q"), ctx,
+        return json(await geocodeMadrid(env, request.url, url.searchParams.get("q"), ctx,
           url.searchParams.has("lat") ? { lat: url.searchParams.get("lat"), lon: url.searchParams.get("lon") } : null), env);
       }
       if (pathname === "/places/reverse" && method === "GET") {
         await authenticatedUser(env, request);
-        return json(await reverseGeocodeMadrid(request.url, {
+        return json(await reverseGeocodeMadrid(env, request.url, {
           lat: url.searchParams.get("lat"), lon: url.searchParams.get("lon"),
         }, ctx), env);
       }
@@ -668,7 +674,7 @@ export default {
 
       if (pathname === "/walking-distances" && method === "POST") {
         await authenticatedUser(env, request);
-        return json(await walkingMatrix(request.url, await request.json(), ctx), env);
+        return json(await walkingMatrix(env, request.url, await request.json(), ctx), env);
       }
 
       const detail = pathname.match(/^\/stops\/([^/]+)\/detail$/);
