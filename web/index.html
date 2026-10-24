@@ -33,6 +33,21 @@
 
     <p id="status" role="status"></p>
 
+    <form id="go-form" class="go-form" role="search" hidden>
+      <div class="place-address-row">
+        <input id="go-query" type="search" maxlength="120" placeholder="Go anywhere in Madrid…"
+          autocomplete="off" enterkeyhint="search" aria-label="Where to? Address or place in Madrid" />
+        <button id="go-search" type="submit">Go</button>
+      </div>
+      <div id="go-results" class="place-search-results"></div>
+      <div id="go-current" class="go-current" hidden>
+        <span id="go-current-name"></span>
+        <button id="go-save" type="button">Save as hub</button>
+        <button id="go-clear" type="button" aria-label="Clear destination" title="Clear destination">×</button>
+      </div>
+      <p id="go-message" class="muted" role="status"></p>
+    </form>
+
     <main id="stops" aria-live="polite"></main>
 
     <div id="map" hidden></div>

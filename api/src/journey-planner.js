@@ -345,6 +345,97 @@ export function uniqueLineCodes(stops) {
   return [...new Set(linesAt(stops).map((item) => item.code))];
 }
 
+/* ---- Other ways there: BiciMAD and on foot ----------------------------- */
+
+/** Straight lines to street distance. Madrid's grid is mostly kind; the 2:1
+ *  corners (Arturo Soria) are why bus walks go through the router, but a
+ *  bike or walking estimate is a comparison figure, not a countdown. */
+const STREET_FACTOR = 1.3;
+// An e-bike in city traffic, lights included: ~15 km/h. Every BiciMAD bike is
+// electric (8,942 of them, 0 mechanical).
+const BIKE_METRES_PER_SECOND = 4.2;
+// Unlocking at the station and docking at the other end.
+const BIKE_HANDLING_SECONDS = 120;
+// Same fixed radius as the BiciMAD section: docks do not thin out overnight.
+const BIKE_ACCESS_RADIUS = 700;
+// Below this a bike is not worth unlocking — walking the same way is as quick.
+const BIKE_MIN_RIDE_METRES = 500;
+// The counts are up to 45 seconds old. A station down to its last bike or
+// dock is a gamble, so it has to be this much closer to win.
+const BIKE_SCARCE_COUNT = 2;
+const BIKE_SCARCE_PENALTY_METRES = 150;
+const BIKE_CANDIDATES = 4;
+
+function stationPoint(station) {
+  return { lat: Number(station.coordinates?.[1]), lon: Number(station.coordinates?.[0]) };
+}
+
+function bikeCandidates(stations, place, usable, count) {
+  return stations
+    .filter((station) => Array.isArray(station.coordinates) && station.inService !== false && usable(station))
+    .map((station) => ({ station, metres: distanceMetres(place, stationPoint(station)) }))
+    .filter(({ metres }) => metres <= BIKE_ACCESS_RADIUS)
+    .map((candidate) => ({
+      ...candidate,
+      cost: candidate.metres + (count(candidate.station) <= BIKE_SCARCE_COUNT ? BIKE_SCARCE_PENALTY_METRES : 0),
+    }))
+    .sort((a, b) => a.cost - b.cost)
+    .slice(0, BIKE_CANDIDATES);
+}
+
+function stationSummary(station, metres) {
+  return {
+    id: String(station.id),
+    number: String(station.number ?? station.id),
+    name: station.name ?? null,
+    coordinates: station.coordinates,
+    bikes: station.bikes ?? null,
+    freeBases: station.freeBases ?? null,
+    walkM: Math.round(metres * STREET_FACTOR),
+  };
+}
+
+/** Rent near the rider, dock near the destination: the best pair, or null.
+ *
+ * A station renting no bikes, or accepting no returns, is no use at that end
+ * — GBFS says which, and MobilityLabs (the fallback) does not, so a missing
+ * flag counts as yes. The nearest station to each end is not always the best
+ * pair: one 100m further on, in the direction of travel, saves both, so the
+ * few nearest at each end are tried against each other.
+ */
+export function planBikeRide(stations, origin, destination) {
+  const pickups = bikeCandidates(stations ?? [], origin,
+    (station) => station.renting !== false && Number(station.bikes) >= 1, (station) => Number(station.bikes));
+  const docks = bikeCandidates(stations ?? [], destination,
+    (station) => station.returning !== false && Number(station.freeBases) >= 1, (station) => Number(station.freeBases));
+  let best = null;
+  for (const pickup of pickups) {
+    for (const dock of docks) {
+      if (String(pickup.station.id) === String(dock.station.id)) continue;
+      const rideM = distanceMetres(stationPoint(pickup.station), stationPoint(dock.station)) * STREET_FACTOR;
+      if (rideM < BIKE_MIN_RIDE_METRES) continue;
+      const walkSeconds = (pickup.metres + dock.metres) * STREET_FACTOR / WALK_METRES_PER_SECOND;
+      const seconds = walkSeconds + BIKE_HANDLING_SECONDS + rideM / BIKE_METRES_PER_SECOND;
+      const rank = seconds + (pickup.cost - pickup.metres + dock.cost - dock.metres) / WALK_METRES_PER_SECOND;
+      if (!best || rank < best.rank) best = { rank, seconds, rideM, pickup, dock };
+    }
+  }
+  if (!best) return null;
+  return {
+    pickup: stationSummary(best.pickup.station, best.pickup.metres),
+    dropoff: stationSummary(best.dock.station, best.dock.metres),
+    rideM: Math.round(best.rideM),
+    estimatedSeconds: Math.round(best.seconds),
+  };
+}
+
+/** The whole way on foot, for comparison. Short trips are often best walked,
+ *  and the bus options cannot say so. */
+export function walkEstimate(origin, destination) {
+  const metres = Math.round(distanceMetres(origin, destination) * STREET_FACTOR);
+  return { metres, seconds: Math.round(metres / WALK_METRES_PER_SECOND) };
+}
+
 /* ---- Planning a journey ------------------------------------------------ */
 
 /** How much one journey request may do. The Free plan lets one invocation
@@ -500,12 +591,16 @@ function walkingReachable(candidates, radius) {
 
 /** Plan a way from `origin` to each Hub in `destinations`.
  *
+ * A destination need not be a saved Hub: the page also sends the one-off
+ * place the rider searched for, and plans it the same way. Each destination
+ * gets its bus options, plus a BiciMAD ride (`bike`, or null) and the walk.
+ *
  * Everything the plan reads comes through `sources` — nearby stops, boards,
- * routes, incidents and the walking matrix — and any of those reads may fail
- * or stall: how long to wait for each, and what a missing answer costs, is
- * decided here. `tier` sizes the search (see PLANNER_BUDGETS) and `now`
- * decides whether Madrid is on its night network. Returns the `/journeys`
- * payload.
+ * routes, incidents, the walking matrix and bike counts (optional) — and any
+ * of those reads may fail or stall: how long to wait for each, and what a
+ * missing answer costs, is decided here. `tier` sizes the search (see
+ * PLANNER_BUDGETS) and `now` decides whether Madrid is on its night network.
+ * Returns the `/journeys` payload.
  */
 export async function plan(body, { sources, tier, now = new Date() }) {
   const night = isNight(now);
@@ -521,6 +616,11 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     radius: Math.min(accessRadius(night),
       Math.max(200, Number(destination.destinationRadiusM) || 700)),
   }));
+  // Bike counts are one city-wide read, shared through the edge cache with the
+  // BiciMAD section. They only add an option, so they never hold up the plan.
+  const bikesRead = sources.bikes
+    ? withinDeadline(sources.bikes(), 4_000)
+    : Promise.resolve(null);
   const originRaw = await sources.nearby(origin.lat, origin.lon, accessRadius(night));
   const originCandidates = nearbyAccess(originRaw, origin, 50);
   const destinationStops = await Promise.all(destinations.map(async (destination) =>
@@ -658,6 +758,12 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     item.options.sort(compareJourneyOptions);
     item.options = deduplicateJourneyOptions(item.options);
   }
+  const bikes = await bikesRead;
+  for (const item of planned) {
+    item.walk = walkEstimate(origin, item.destination);
+    item.bike = bikes?.stations ? planBikeRide(bikes.stations, origin, item.destination) : null;
+    if (item.bike) item.bike.fetchedAt = bikes.fetchedAt ?? null;
+  }
   // The boards behind every boarding stop offered. The page files them in the
   // same per-stop store its cards, sheet and map read, so a hub card and the
   // stop it opens show one set of times and move together on every refresh.
@@ -681,6 +787,7 @@ export async function plan(body, { sources, tier, now = new Date() }) {
       routes: routeCodes.length,
       arrivals: liveStopIds.length + transferStopIds.length,
       incidents: incidentCodes.length,
+      bikes: sources.bikes ? 1 : 0,
     },
   };
 }

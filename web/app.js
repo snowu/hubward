@@ -156,6 +156,7 @@ let journeyInitialPending = true;
 let journeyCell = null;
 let journeyLoadedAt = 0;
 let journeyTimer = null;
+let journeyRerun = false;
 let busListMode = localStorage.getItem("emt:bus-list-mode") === "stops" ? "stops" : "places";
 
 const listEl = document.getElementById("stops");
@@ -541,6 +542,7 @@ function openWalkingDirections(coordinates) {
 }
 
 const WALKING_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="13" cy="4" r="1.8"></circle><path d="m10.5 8 2.5-1 2.5 2.5 2.5 1"></path><path d="m13 7-2 5 3 2 1.5 5"></path><path d="m11 12-3 3-2 4"></path></svg>';
+const BIKE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="16" r="3.5"></circle><circle cx="18" cy="16" r="3.5"></circle><path d="m6 16 4-7h6l2 7M10 9l2 7h-6M9 6h3M15 6h2l-1 3"></path></svg>';
 // A line with a stop at each end. The old zigzag was meant to read as a route
 // and read as a letter N instead.
 const LINES_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">'
@@ -581,6 +583,250 @@ function activeDestinations() {
     (placeDistance(place) == null || placeDistance(place) > place.geofence_radius_m))
     .sort((a, b) => proximity(placeDistance(a)) - proximity(placeDistance(b)))
     .slice(0, HUB_CARD_LIMIT);
+}
+
+/* ---- Go anywhere -------------------------------------------------------- */
+
+// A one-off destination: somewhere searched for rather than saved as a Hub.
+// It is planned exactly like one and drawn as the first card. It survives a
+// reload — you search, put the phone away, and look again at the corner — but
+// not the day.
+// Per user, like every other personal cache: it is where someone is going.
+const goKey = () => (authUser ? `emt:go:${authUser.id}` : null);
+const GO_ID = "go";
+const GO_KEEP_MS = 12 * 3600 * 1000;
+const WALK_SHOWN_UP_TO_M = 3000;
+
+function readGoPlace() {
+  if (!goKey()) return null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(goKey()) ?? "null");
+    if (!saved || Date.now() - Number(saved.setAt) > GO_KEEP_MS) return null;
+    if (!Number.isFinite(saved.lat) || !Number.isFinite(saved.lon)) return null;
+    return { id: GO_ID, name: String(saved.name ?? "Destination"), address: saved.address ?? null,
+      lat: saved.lat, lon: saved.lon, setAt: saved.setAt };
+  } catch {
+    return null;
+  }
+}
+
+let goPlace = null;
+
+function setGoPlace(place) {
+  goPlace = place
+    ? { id: GO_ID, name: place.name, address: place.address ?? null, lat: place.lat, lon: place.lon, setAt: Date.now() }
+    : null;
+  try {
+    if (goPlace && goKey()) localStorage.setItem(goKey(), JSON.stringify(goPlace));
+    else if (goKey()) localStorage.removeItem(goKey());
+  } catch {
+    // A private window still plans; it just forgets on reload.
+  }
+  if (journeyPayload) {
+    journeyPayload = { ...journeyPayload,
+      destinations: journeyPayload.destinations.filter((item) => item.destination.id !== GO_ID) };
+  }
+  renderGoForm();
+  render();
+  if (goPlace) scheduleJourneys({ force: true });
+}
+
+const goForm = document.getElementById("go-form");
+const goQuery = document.getElementById("go-query");
+const goResults = document.getElementById("go-results");
+const goCurrent = document.getElementById("go-current");
+const goMessage = document.getElementById("go-message");
+
+function renderGoForm() {
+  // The body's dataset rather than `section`, which is declared further down
+  // and is not readable yet on the first render.
+  goForm.hidden = !authSession || document.body.dataset.section === "bikes"
+    || busListMode !== "places" || listEl.hidden;
+  goCurrent.hidden = !goPlace;
+  syncGoMarker();
+  document.getElementById("go-current-name").textContent = goPlace ? `To ${goPlace.name}` : "";
+}
+
+goForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = goQuery.value.trim();
+  if (query.length < 3) {
+    goMessage.textContent = "Type at least three letters";
+    return;
+  }
+  const button = document.getElementById("go-search");
+  button.disabled = true;
+  goMessage.textContent = "Searching Madrid…";
+  try {
+    const results = await api(`/places/geocode?q=${encodeURIComponent(query)}`);
+    goResults.replaceChildren(...results.map((result) => {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.textContent = result.displayName;
+      choice.addEventListener("click", () => {
+        goResults.replaceChildren();
+        goQuery.value = "";
+        goQuery.blur();
+        goMessage.textContent = "";
+        setGoPlace({
+          // The first part of a geocoder's answer is the name; the rest is
+          // the district and city you already know you are in.
+          name: String(result.displayName).split(",")[0].trim().slice(0, 80) || query,
+          address: result.displayName, lat: Number(result.lat), lon: Number(result.lon),
+        });
+        window.scrollTo({ top: 0 });
+      });
+      return choice;
+    }));
+    goMessage.textContent = results.length ? "" : "Nothing found in Madrid";
+  } catch (err) {
+    goMessage.textContent = `Could not search: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+document.getElementById("go-clear").addEventListener("click", () => {
+  goResults.replaceChildren();
+  goMessage.textContent = "";
+  setGoPlace(null);
+});
+document.getElementById("go-save").addEventListener("click", () => {
+  if (!goPlace) return;
+  placesMessage.textContent = "";
+  renderPlacesDialog();
+  placesDialog.showModal();
+  openPlaceEditor({ name: goPlace.name, address: goPlace.address, lat: goPlace.lat, lon: goPlace.lon });
+});
+
+/** A name arrived for the place already being planned: show it, but do not
+ *  plan again — the coordinates are what the planner used, and they hold. */
+function renameGoPlace(name, address) {
+  if (!goPlace || !name) return;
+  goPlace = { ...goPlace, name: String(name).slice(0, 80), address: address ?? goPlace.address };
+  try {
+    if (goKey()) localStorage.setItem(goKey(), JSON.stringify(goPlace));
+  } catch {
+    // Kept in memory only.
+  }
+  render();
+}
+
+/* ---- Go here, from the map ----------------------------------------------- */
+
+// Held this long without moving, a press on the map offers "Go here": long
+// enough that a slow pan never trips it, short enough not to feel stuck.
+const LONG_PRESS_MS = 550;
+const LONG_PRESS_SLOP_PX = 10;
+let goMarker = null;
+
+function syncGoMarker() {
+  if (!leafletMap) return;
+  if (!goPlace) {
+    goMarker?.remove();
+    goMarker = null;
+    return;
+  }
+  const at = [goPlace.lon, goPlace.lat];
+  if (!goMarker) {
+    goMarker = domMarker('<span aria-hidden="true"></span>', "go-pin", at, { anchor: "bottom" })
+      .addTo(leafletMap);
+  }
+  goMarker.setLngLat(at);
+  goMarker.getElement().title = `Going to ${goPlace.name}`;
+}
+
+async function goHere(lngLat) {
+  closeMapPopup();
+  const lat = Number(lngLat.lat.toFixed(5));
+  const lon = Number(lngLat.lng.toFixed(5));
+  setGoPlace({ name: "Dropped pin", lat, lon });
+  showView("list");
+  window.scrollTo({ top: 0 });
+  try {
+    const found = await api(`/places/reverse?lat=${lat}&lon=${lon}`);
+    // Only if it is still where we are going: a second pin may have landed.
+    if (goPlace?.lat === lat && goPlace?.lon === lon) renameGoPlace(found?.name, found?.displayName);
+  } catch {
+    // An unnamed pin still plans; the name is a nicety.
+  }
+}
+
+function goHerePopup(lngLat) {
+  const wrap = document.createElement("div");
+  wrap.className = "go-here-popup";
+  wrap.append(popupHead("Dropped pin"));
+  const metres = metresFromCurrent([lngLat.lng, lngLat.lat]);
+  if (metres != null) {
+    const away = document.createElement("p");
+    away.className = "stop-num";
+    away.textContent = `${formatDistance(Math.round(metres))} from you`;
+    wrap.append(away);
+  }
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "go-here";
+  go.textContent = "Go here";
+  go.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void goHere(lngLat);
+  });
+  wrap.append(go);
+  return wrap;
+}
+
+/** Press and hold anywhere on the map (right-click on a desktop) to go there.
+ *
+ * MapLibre has no long-press event, so this is a timer on its touch events,
+ * cancelled by any real movement or a second finger. Presses that start on a
+ * pin or a popup are theirs, not the map's. Android also turns a long press
+ * into a contextmenu event; both just open the same popup. The lift that ends
+ * a long press is swallowed: a browser may still turn it into a click, and a
+ * click on the map closes the popup it has just opened.
+ */
+function bindGoHere(map) {
+  let timer = null;
+  let start = null;
+  let pressed = false;
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    start = null;
+  };
+  const offer = (lngLat) => {
+    cancel();
+    pressed = true;
+    if (!authSession) return;
+    showMapPopup(map, lngLat, "go-here", () => goHerePopup(lngLat));
+  };
+  map.on("touchstart", (event) => {
+    cancel();
+    pressed = false;
+    const touch = event.originalEvent;
+    if (touch.touches?.length !== 1) return;
+    if (touch.target?.closest?.(".maplibregl-marker, .maplibregl-popup")) return;
+    start = event.point;
+    const lngLat = event.lngLat;
+    timer = setTimeout(() => offer(lngLat), LONG_PRESS_MS);
+  });
+  map.on("touchmove", (event) => {
+    if (start && Math.hypot(event.point.x - start.x, event.point.y - start.y) > LONG_PRESS_SLOP_PX) cancel();
+  });
+  map.on("touchend", (event) => {
+    if (pressed && event.originalEvent?.cancelable) event.originalEvent.preventDefault();
+    pressed = false;
+    cancel();
+  });
+  map.on("touchcancel", cancel);
+  map.on("contextmenu", (event) => {
+    event.originalEvent?.preventDefault?.();
+    offer(event.lngLat);
+  });
+}
+
+/** What the planner is asked about: the one-off destination first, then the
+ *  hubs you are not already at. */
+function journeyDestinations() {
+  return [goPlace, ...activeDestinations()].filter(Boolean);
 }
 
 function journeyFor(placeId) {
@@ -646,9 +892,12 @@ function placeRouteRow(option, card, { primary = false } = {}) {
   const copy = document.createElement("p");
   const leg = firstLegTimes(option);
   const wait = leg.wait;
-  const connection = option.type === "direct"
+  const connection = (option.type === "direct"
     ? "direct"
-    : `then ${option.secondLeg.label} · ${option.transfer.walkM} m transfer`;
+    : `then ${option.secondLeg.label} · ${option.transfer.walkM} m transfer`)
+    + (option.estimatedSeconds != null && journeyPayload?.generatedAt
+      ? ` · there by ${arrivalClock(journeyPayload.generatedAt + option.estimatedSeconds * 1000)}`
+      : "");
   const origin = document.createElement("button");
   origin.type = "button";
   origin.className = "stop-open place-stop-open";
@@ -716,6 +965,81 @@ function placeRouteRow(option, card, { primary = false } = {}) {
   return route;
 }
 
+function arrivalClock(epochMs) {
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(epochMs));
+}
+
+/** One more way there, laid out like a bus row: badge, what to do, a
+ *  directions button and the time it takes door to door. */
+function modeRow({ icon, label, action, detail, seconds, directionsTitle, directionsTo }) {
+  const row = document.createElement("div");
+  row.className = "place-route place-route-mode";
+  const badge = document.createElement("strong");
+  badge.className = "place-line place-mode";
+  // Inline like a bus line's colour, so every interface style's own
+  // .place-line colour gives way to it the same way.
+  badge.style.color = "var(--accent)";
+  badge.innerHTML = icon;
+  badge.setAttribute("aria-label", label);
+  const copy = document.createElement("p");
+  const small = document.createElement("small");
+  small.textContent = `${detail} · there by ${arrivalClock(Date.now() + seconds * 1000)}`;
+  copy.append(action, document.createElement("br"), small);
+  const directions = document.createElement("button");
+  directions.className = "place-route-directions";
+  directions.type = "button";
+  directions.title = directionsTitle;
+  directions.setAttribute("aria-label", directionsTitle);
+  directions.innerHTML = WALKING_ICON;
+  directions.disabled = !directionsTo;
+  directions.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openWalkingDirections(directionsTo);
+  });
+  const total = document.createElement("time");
+  total.className = "eta mode-total";
+  total.textContent = `${Math.max(1, Math.round(seconds / 60))} min`;
+  row.append(badge, copy, directions, total);
+  return row;
+}
+
+function bikeRouteRow(bike) {
+  const pickup = document.createElement("button");
+  pickup.type = "button";
+  pickup.className = "stop-open place-stop-open";
+  pickup.textContent = `BiciMAD ${bike.pickup.number} · ${bike.pickup.walkM} m walk`;
+  pickup.setAttribute("aria-label", `Open BiciMAD station ${bike.pickup.number}`);
+  pickup.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openBikeStation(bikeById.get(String(bike.pickup.id)) ?? bike.pickup);
+  });
+  const bikes = bike.pickup.bikes == null ? "" : `${bike.pickup.bikes} bike${bike.pickup.bikes === 1 ? "" : "s"} · `;
+  const docks = bike.dropoff.freeBases == null ? "" : ` (${bike.dropoff.freeBases} free)`;
+  return modeRow({
+    icon: BIKE_ICON,
+    label: "BiciMAD",
+    action: pickup,
+    detail: `${bikes}${formatDistance(bike.rideM)} ride · dock at ${bike.dropoff.number}${docks}`,
+    seconds: bike.estimatedSeconds,
+    directionsTitle: `Walk to BiciMAD ${bike.pickup.number}`,
+    directionsTo: bike.pickup.coordinates,
+  });
+}
+
+function walkRouteRow(walk, place) {
+  const action = document.createElement("b");
+  action.textContent = "Walk";
+  return modeRow({
+    icon: WALKING_ICON,
+    label: "On foot",
+    action,
+    detail: `about ${formatDistance(walk.metres)}`,
+    seconds: walk.seconds,
+    directionsTitle: `Walk to ${place.name}`,
+    directionsTo: [place.lon, place.lat],
+  });
+}
+
 function placeCard(place) {
   const card = document.createElement("article");
   card.className = "place-card";
@@ -772,7 +1096,7 @@ function placeCard(place) {
     status.className = "place-route-status";
     status.textContent = !myLocation
       ? "Waiting for your location…"
-      : !journeyPayload ? "Loading…" : "No route";
+      : !journeyPayload || !planned ? "Loading…" : "No route";
     route.append(status);
   }
   else {
@@ -807,11 +1131,18 @@ function placeCard(place) {
   }
   title.append(freshnessDot(option ? firstLegTimes(option).fetchedAt : journeyPayload?.generatedAt));
   if (!route.parentNode) card.append(route);
+  // The other ways there, always in view: they are not alternatives to the
+  // bus so much as the answer to "is the bus even worth it".
+  if (myLocation && planned) {
+    if (planned.bike) card.append(bikeRouteRow(planned.bike));
+    if (planned.walk && planned.walk.metres <= WALK_SHOWN_UP_TO_M) card.append(walkRouteRow(planned.walk, place));
+  }
+  if (place.id === GO_ID) card.classList.add("place-card-go");
   return card;
 }
 
 function renderPlaces() {
-  const destinations = activeDestinations();
+  const destinations = journeyDestinations();
   if (destinations.length && !journeyPayload) {
     if (journeyInitialPending) {
       const loader = document.createElement("div");
@@ -984,6 +1315,7 @@ function render() {
     placeDistance(place) != null && placeDistance(place) <= place.geofence_radius_m);
   headerContext.hidden = !current;
   headerContext.querySelector("span").textContent = current ? `At ${current.name}` : "";
+  renderGoForm();
   if (authSession && busListMode === "places") return renderPlaces();
   return renderSavedStops();
 }
@@ -1070,6 +1402,7 @@ function showSignedOut(message = "") {
   setUserCacheScope(null);
   stops = [];
   places = [];
+  goPlace = null;
   journeyPayload = null;
   journeyInitialPending = true;
   bikeSaved = [];
@@ -1093,6 +1426,7 @@ async function applySession(session) {
   // Reopen with the new token, i.e. with this user's EMT account.
   live.reset();
   setUserCacheScope(authUser.id);
+  goPlace = readGoPlace();
   emtAccount.reset();
   void emtAccount.load();
   void tracking.load();
@@ -1139,9 +1473,13 @@ async function loadPlaces() {
 let journeyLoad = null;
 
 async function loadJourneys({ force = false } = {}) {
-  if (journeyLoad) return journeyLoad;
-  if (!authSession || !myLocation || places.length === 0) return;
-  const destinations = activeDestinations();
+  if (journeyLoad) {
+    // A destination picked while a plan is out must not wait a whole minute.
+    if (force) journeyRerun = true;
+    return journeyLoad;
+  }
+  if (!authSession || !myLocation) return;
+  const destinations = journeyDestinations();
   if (destinations.length === 0) return;
   const cell = `${myLocation[0].toFixed(3)},${myLocation[1].toFixed(3)}`;
   if (!force && cell === journeyCell && Date.now() - journeyLoadedAt < 60_000) return;
@@ -1202,6 +1540,10 @@ async function loadJourneys({ force = false } = {}) {
     return await operation;
   } finally {
     if (journeyLoad === operation) journeyLoad = null;
+    if (journeyRerun) {
+      journeyRerun = false;
+      scheduleJourneys({ force: true });
+    }
   }
 }
 
@@ -1475,7 +1817,7 @@ function openPlaceEditor(place = null) {
   placeDraft = place ? { ...place } : null;
   document.getElementById("place-name").value = place?.name ?? "";
   document.getElementById("place-address").value = place?.address ?? "";
-  document.getElementById("place-add").textContent = place ? "Save changes" : "Save hub";
+  document.getElementById("place-add").textContent = place?.id ? "Save changes" : "Save hub";
   placeSearchResults.replaceChildren();
   placesMessage.textContent = "";
   placeEditor.hidden = false;
@@ -1548,6 +1890,9 @@ placesForm.addEventListener("submit", async (event) => {
     });
     if (editingId) places = places.map((item) => item.id === editingId ? place : item);
     else places.push(place);
+    // Saved as a hub: its hub card takes over from the one-off one.
+    if (!editingId && goPlace && Math.abs(goPlace.lat - placeDraft.lat) < 1e-6
+      && Math.abs(goPlace.lon - placeDraft.lon) < 1e-6) setGoPlace(null);
     document.getElementById("place-name").value = "";
     journeyPayload = null;
     journeyInitialPending = true;
@@ -2655,6 +3000,8 @@ function ensureMap() {
   leafletMap.on("moveend", loadNearby);
   // A tap on the map itself dismisses whatever popup is open.
   leafletMap.on("click", () => closeMapPopup());
+  bindGoHere(leafletMap);
+  syncGoMarker();
 
   // Fit once, on the first build, when all pins are known.
   const points = stops.map((s) => details[s.stop_id]?.coordinates).filter(Boolean);
@@ -3335,6 +3682,7 @@ function showView(view) {
   }
   listEl.hidden = isMap;
   mapEl.hidden = !isMap;
+  renderGoForm();
   if (isMap) {
     ensureMap();
     rebuildMarkers();
@@ -5441,6 +5789,7 @@ function showSection(next) {
 
   const mapView = viewMapBtn.getAttribute("aria-selected") === "true";
   listEl.hidden = bikes || mapView;
+  renderGoForm();
   mapEl.hidden = bikes || !mapView;
   bikesEl.hidden = !bikes || mapView;
   bikeMapEl.hidden = !bikes || !mapView;

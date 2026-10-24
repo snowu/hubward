@@ -263,6 +263,40 @@ async function geocodeMadrid(requestUrl, query, ctx) {
     }, ctx);
 }
 
+/** The street a dropped map pin stands on, so the card it makes has a name.
+ *
+ * Keyed on a ~11m grid: a long press is not that precise, and the same corner
+ * pressed twice should cost Nominatim one call, not two (its usage policy is
+ * one request a second for everyone using this worker).
+ */
+async function reverseGeocodeMadrid(requestUrl, value, ctx) {
+  const { lat, lon } = madridPoint(value);
+  const key = `reverse/${lat.toFixed(4)},${lon.toFixed(4)}`;
+  return edgeCachedJson(requestUrl, key, GEOCODE_CACHE_TTL, async () => {
+    const target = new URL("https://nominatim.openstreetmap.org/reverse");
+    target.search = new URLSearchParams({
+      lat: lat.toFixed(4), lon: lon.toFixed(4), format: "jsonv2", addressdetails: "1", zoom: "18",
+    }).toString();
+    const response = await fetch(target, {
+      headers: {
+        "user-agent": "hubward/1.0 (https://snowu.github.io/hubward/)",
+        referer: "https://snowu.github.io/hubward/",
+        accept: "application/json",
+      },
+    });
+    if (!response.ok) throw new EmtError("upstream", `address lookup HTTP ${response.status}`);
+    const row = await response.json();
+    const address = row.address ?? {};
+    const street = [address.road ?? address.pedestrian ?? address.square, address.house_number]
+      .filter(Boolean).join(" ");
+    return {
+      // A named place (a museum, a park) beats the street it is on.
+      name: String(row.name || street || String(row.display_name ?? "").split(",")[0] || "").trim() || null,
+      displayName: row.display_name ? String(row.display_name) : null,
+    };
+  }, ctx);
+}
+
 function madridPoint(value) {
   const lat = Number(value?.lat);
   const lon = Number(value?.lon);
@@ -398,6 +432,7 @@ function plannerSources(requestUrl, emt, ctx) {
     route: (line) => cachedRoute(requestUrl, emt, line, ctx),
     incidents: (line) => cachedIncidents(requestUrl, emt, line, ctx),
     walking: (body) => walkingMatrix(requestUrl, body, ctx),
+    bikes: () => cachedBikeStations(requestUrl, emt, ctx),
   };
 }
 
@@ -521,6 +556,12 @@ export default {
       if (pathname === "/places/geocode" && method === "GET") {
         await authenticatedUser(env, request);
         return json(await geocodeMadrid(request.url, url.searchParams.get("q"), ctx), env);
+      }
+      if (pathname === "/places/reverse" && method === "GET") {
+        await authenticatedUser(env, request);
+        return json(await reverseGeocodeMadrid(request.url, {
+          lat: url.searchParams.get("lat"), lon: url.searchParams.get("lon"),
+        }, ctx), env);
       }
       const place = pathname.match(/^\/places\/([^/]+)$/);
       if (place && method === "PATCH") {

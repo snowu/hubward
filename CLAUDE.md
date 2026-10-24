@@ -138,7 +138,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 209 tests, no network
+npm test          # web smoke check, then vitest under workerd; 216 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -894,6 +894,36 @@ is most stale), and manually per-card or all at once.
    anywhere moves them all. Hub cards re-pick their catchable bus from that
    board (`firstLegTimes()`, mirroring the planner's `nextDeparture()`); the
    planner's snapshot is only a fallback. Don't add a second copy of a board.
+
+21. **Go anywhere, not only to hubs.** The Hubward tab opens with a search
+   box (`#go-form`, geocoded by `/places/geocode`). The place picked becomes
+   a one-off destination, `goPlace` (id `go`), planned by the same `/journeys`
+   call as the hubs and drawn as the first card; "Save as hub" opens the hub
+   editor prefilled. It is kept per user in localStorage for 12 hours, so the
+   card is still there when you look again at the next corner.
+
+   **Or press and hold the map** (right-click on a desktop): a "Dropped pin"
+   popup offers "Go here", which sets the same destination, switches to the
+   list and leaves a pin on the map. MapLibre has no long-press event, so
+   `bindGoHere()` times its touch events (550ms, cancelled by 10px of movement
+   or a second finger, ignored on pins and popups) and swallows the lift that
+   ends the press — a browser may turn it into a click, and a map click closes
+   the popup just opened. The card is named after the fact by
+   `GET /places/reverse` (Nominatim, ~11m grid, cached 30 days) without
+   re-planning.
+
+   **Every destination card also offers BiciMAD and walking.** The Planner
+   reads the city's bike counts once per plan (the same 45s `bikes` cache as
+   the BiciMAD section, under a 4s deadline: bikes only ever add an option)
+   and returns `bike` and `walk` beside each destination's bus `options`.
+   `planBikeRide()` tries the four best stations renting near you against the
+   four best accepting returns near the destination (700m, like the BiciMAD
+   section), passing over one down to its last two bikes or docks unless it is
+   150m closer, and drops rides under 500m. Times are straight lines ×1.3 for
+   streets, 4.2 m/s in the saddle and two minutes to unlock and dock — a
+   comparison figure, which is why those rows show door-to-door minutes rather
+   than a countdown. Walking is shown up to 3km. Every row, buses included,
+   ends "there by HH:MM" so the three can be compared at a glance.
 
 Cached payload shapes are versioned in the worker's Cache API keys (`CACHE_VERSION`).
 Bump it when a parsed shape changes, or week-old detail entries keep serving

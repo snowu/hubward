@@ -454,6 +454,41 @@ describe("GET /places/geocode", () => {
   });
 });
 
+describe("GET /places/reverse", () => {
+  const userAuth = { headers: { Authorization: "Bearer user-jwt" } };
+  const signedIn = (nominatim) => vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    if (String(url).includes("/auth/v1/user")) return new Response(JSON.stringify({
+      id: "user-id", email: "user@example.com",
+    }));
+    return new Response(JSON.stringify(nominatim));
+  });
+
+  it("requires a signed-in user", async () => {
+    expect((await call("/places/reverse?lat=40.4168&lon=-3.7038")).status).toBe(401);
+  });
+
+  it("names a pin by its street and number, and asks Nominatim once per corner", async () => {
+    const spy = signedIn({
+      name: "", display_name: "12, Calle de Atocha, Centro, Madrid, España",
+      address: { road: "Calle de Atocha", house_number: "12" }, osm_id: "discard",
+    });
+    const res = await call("/places/reverse?lat=40.41301&lon=-3.70201", userAuth);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      name: "Calle de Atocha 12", displayName: "12, Calle de Atocha, Centro, Madrid, España",
+    });
+    await call("/places/reverse?lat=40.41302&lon=-3.70202", userAuth);
+    const lookups = spy.mock.calls.filter(([url]) => String(url).includes("nominatim"));
+    expect(lookups).toHaveLength(1);
+    expect(String(lookups[0][0])).toContain("/reverse?lat=40.4130&lon=-3.7020");
+  });
+
+  it("refuses a point outside Madrid", async () => {
+    signedIn({});
+    expect((await call("/places/reverse?lat=41.38&lon=2.17", userAuth)).status).toBe(404);
+  });
+});
+
 describe("POST /walking-distances", () => {
   const userAuth = {
     method: "POST",
