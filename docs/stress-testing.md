@@ -87,7 +87,7 @@ virtual users.
 
 ## 5. What "X thousand at once" means
 
-10k daily users is not 10k at once. Use clusters around rush hour; a fair
+10k daily users is not 10k at once. Usage clusters around rush hour; a fair
 model is 5–10% of the day's users active in the busiest 15 minutes, so
 500–1,000 at once for 10k a day. Step up to about three times that (3,000),
 and add one spike test of everyone opening the app within the same minute.
