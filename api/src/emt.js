@@ -1,14 +1,18 @@
 import { EmtError } from "./errors.js";
 import { emtEndpoint, recordUpstreamMetric } from "./metrics.js";
+import { sharedLoad } from "./shared-load.js";
 
 const BASE = "https://openapi.emtmadrid.es/";
 const TOKEN_KEY = "emt:token";
 
-/** Tokens in isolate memory, one entry per Account: `{token, expiresAt, pending}`. */
+/** Tokens in isolate memory, one entry per Account: `{token, expiresAt}`. */
 const tokens = new Map();
+/** Logins and KV reads in progress, per Account (see shared-load.js). */
+const tokenLoads = new Map();
 
 export function clearTokenMemoryForTest() {
   tokens.clear();
+  tokenLoads.clear();
 }
 
 // EMT reports failure as a `code` inside a 200 response, not as an HTTP status.
@@ -197,9 +201,8 @@ async function accountToken(emt, account, { force = false } = {}) {
   const state = tokens.get(slot.id) ?? {};
   tokens.set(slot.id, state);
   if (!force && state.token && state.expiresAt > Date.now()) return state.token;
-  if (!force && state.pending) return state.pending;
   if (force) state.token = null;
-  const load = (async () => {
+  const load = async () => {
     if (!force) {
       const cached = slot.decode(await emt.env.KV.get(slot.key));
       if (cached) return Object.assign(state, cached).token;
@@ -214,13 +217,10 @@ async function accountToken(emt, account, { force = false } = {}) {
     const expiresAt = Date.now() + fresh.ttl * 1000;
     await emt.env.KV.put(slot.key, slot.encode(fresh.token, expiresAt), { expirationTtl: fresh.ttl });
     return Object.assign(state, { token: fresh.token, expiresAt }).token;
-  })();
-  if (!force) state.pending = load;
-  try {
-    return await load;
-  } finally {
-    if (state.pending === load) state.pending = null;
-  }
+  };
+  // A forced re-login (code 80) is never shared: the token it replaces may be
+  // exactly the one a running load is about to hand out.
+  return force ? load() : sharedLoad(tokenLoads, slot.id, load);
 }
 
 function parseArrivals(body) {
