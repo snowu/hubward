@@ -257,7 +257,7 @@ const board = (stopId, line, ...seconds) => ({
 /** In-memory Planner sources. Nearby is an exact straight-line disc; walking
  *  is straight-line unless `walkM` overrides a stop; anything listed in
  *  `failing` rejects. Every read is recorded. */
-function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = false, failing = [], bikes }) {
+function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = false, failing = [], bikes, bikesHang = false }) {
   const reads = { nearby: [], board: [], route: [], incidents: [], bikes: 0 };
   const fail = (what) => Promise.reject(new Error(`${what} is down`));
   return {
@@ -292,6 +292,7 @@ function world({ stops, routes = {}, boards = {}, walkM = {}, walkingDown = fals
       ...(bikes === undefined ? {} : {
         bikes() {
           reads.bikes += 1;
+          if (bikesHang) return new Promise(() => {});
           return failing.includes("bikes") ? fail("bikes") : Promise.resolve({ stations: bikes, fetchedAt: 7 });
         },
       }),
@@ -518,6 +519,15 @@ describe("plan: BiciMAD and walking", () => {
     expect(result.destinations[0].bike).toBeNull();
     expect(result.destinations[0].walk.metres).toBeCloseTo(390, -1);
     expect(result.destinations[0].walk.seconds).toBeCloseTo(300, -1);
+  });
+
+  it("does not hold the buses for bike counts that are slow to arrive", async () => {
+    const w = world({ stops: [], bikes: [], bikesHang: true });
+    const started = Date.now();
+    const result = await planFor(w, [hub(4000, 0)], SUMMER_NOON);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.destinations[0].bike).toBeNull();
+    expect(result.timings.bikeWaitMs).toBeGreaterThanOrEqual(400);
   });
 
   it("still plans the buses when bike counts cannot be read", async () => {

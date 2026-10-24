@@ -138,7 +138,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 219 tests, no network
+npm test          # web smoke check, then vitest under workerd; 220 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -902,9 +902,12 @@ is most stale), and manually per-card or all at once.
    editor prefilled. It is kept per user in localStorage for 12 hours, so the
    card is still there when you look again at the next corner.
 
-   **The box searches as you type** (300ms pause, 3+ letters; a slower answer
+   **The box searches as you type** (200ms pause, 3+ letters; a slower answer
    to an older prefix is dropped), and Go/Enter takes the top result once it
-   is showing. `/places/geocode` asks **Photon** first: it matches prefixes
+   is showing. Answers are kept for the session (60 queries), so backspacing
+   is instant, and while a new answer is on its way the results already
+   showing that still match every typed word stay up. Photon gets 2.5s
+   before Nominatim is asked instead. `/places/geocode` asks **Photon** first: it matches prefixes
    and forgives typos ("calle alcal"), where Nominatim, a whole-word address
    parser, found nothing until a name was typed in full. Nominatim answers
    only when Photon is down or empty. Street-sign abbreviations (`c/`, `avda`,
@@ -935,6 +938,20 @@ is most stale), and manually per-card or all at once.
    comparison figure, which is why those rows show door-to-door minutes rather
    than a countdown. Walking is shown up to 3km. Every row, buses included,
    ends "there by HH:MM" so the three can be compared at a glance.
+
+   **Bikes never hold up the buses.** The bike read starts with the plan, but
+   its cache lasts 45s, so the first plan after the app has been closed a
+   while reads GBFS cold. Once the bus plan is done it waits at most
+   `BIKE_GRACE_MS` (500ms) more; past that the plan goes out without a bike
+   row, and `ctx.waitUntil` keeps the read alive to fill the cache for the
+   next refresh. Every plan reports `timings` (`busesMs`, `bikeWaitMs`) so a
+   slow one can be pinned to a phase from the network panel.
+
+   **The page remembers the batch size** (`emt:journey-batch`). It used to
+   start each open at one destination per request until the first answer
+   said otherwise, so the open meant to be quick sent every destination as
+   its own full plan. A `bad_request` at a remembered size drops it to one
+   and plans again.
 
 Cached payload shapes are versioned in the worker's Cache API keys (`CACHE_VERSION`).
 Bump it when a parsed shape changes, or week-old detail entries keep serving
