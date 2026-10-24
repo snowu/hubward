@@ -365,6 +365,15 @@ const BIKE_MIN_RIDE_METRES = 500;
 const BIKE_SCARCE_COUNT = 2;
 const BIKE_SCARCE_PENALTY_METRES = 150;
 const BIKE_CANDIDATES = 4;
+// How long a finished bus plan waits for bike counts that have not arrived.
+//
+// The bike read starts with the plan and usually lands long before the buses
+// do. But its cache lasts 45 seconds, so the first plan after the app has
+// been closed a minute reads GBFS cold — and waiting the full 4s deadline for
+// it held up every card, buses included, for a row that is only a comparison.
+// Past this grace the plan goes out without a bike row; the read carries on
+// in the background and fills the cache for the next refresh.
+const BIKE_GRACE_MS = 500;
 
 function stationPoint(station) {
   return { lat: Number(station.coordinates?.[1]), lon: Number(station.coordinates?.[0]) };
@@ -603,6 +612,7 @@ function walkingReachable(candidates, radius) {
  * Returns the `/journeys` payload.
  */
 export async function plan(body, { sources, tier, now = new Date() }) {
+  const startedAt = Date.now();
   const night = isNight(now);
   const origin = plannerLocation(body?.origin, "origin");
   const budget = plannerBudget(tier);
@@ -758,7 +768,8 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     item.options.sort(compareJourneyOptions);
     item.options = deduplicateJourneyOptions(item.options);
   }
-  const bikes = await bikesRead;
+  const busesMs = Date.now() - startedAt;
+  const bikes = await withinDeadline(bikesRead, BIKE_GRACE_MS);
   for (const item of planned) {
     item.walk = walkEstimate(origin, item.destination);
     item.bike = bikes?.stations ? planBikeRide(bikes.stations, origin, item.destination) : null;
@@ -781,6 +792,9 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     // How many hubs the page may send in its next request.
     maxDestinations: budget.destinations,
     generatedAt: now.getTime(),
+    // Wall-clock milliseconds, so a slow plan can be blamed on the right
+    // phase from the page's network panel.
+    timings: { busesMs, bikeWaitMs: Date.now() - startedAt - busesMs },
     calls: {
       nearby: 1 + destinations.length,
       walking: walkingRouted ? 1 : 0,

@@ -128,8 +128,20 @@ const HUB_CARD_LIMIT = 3;
 const NEAREST_BIKE_STATION_LIMIT = 2;
 // Hubs per /journeys request. One until the worker says it can take more:
 // each response carries its limit, which is how a plan upgrade reaches the
-// page without a release.
-let journeyBatchSize = 1;
+// page without a release. Remembered across opens: starting from one every
+// time sent each destination as its own full plan — nearby search, walking
+// matrix and boards all repeated — on exactly the open that is meant to be
+// quick. A worker that has since lowered its limit answers 400 (bad_request);
+// that drops this back to one and plans again.
+const JOURNEY_BATCH_KEY = "emt:journey-batch";
+let journeyBatchSize = (() => {
+  try {
+    const remembered = Number(localStorage.getItem(JOURNEY_BATCH_KEY));
+    return Number.isInteger(remembered) && remembered >= 1 && remembered <= 12 ? remembered : 1;
+  } catch {
+    return 1;
+  }
+})();
 const savedTheme = localStorage.getItem(THEME_KEY);
 let themeChoice = ["light", "dark"].includes(savedTheme) ? savedTheme : "system";
 if (themeChoice === "system") document.documentElement.removeAttribute("data-theme");
@@ -157,6 +169,7 @@ let journeyCell = null;
 let journeyLoadedAt = 0;
 let journeyTimer = null;
 let journeyRerun = false;
+let journeyInFlightKey = null;
 let busListMode = localStorage.getItem("emt:bus-list-mode") === "stops" ? "stops" : "places";
 
 const listEl = document.getElementById("stops");
@@ -655,10 +668,30 @@ function searchPlaces(query) {
 }
 
 // Search as you type: a pause this long counts as "show me what you have".
-const GO_TYPE_PAUSE_MS = 300;
+const GO_TYPE_PAUSE_MS = 200;
 let goTypeTimer = null;
 let goSearchSeq = 0;
 let goShownFor = null;
+// Answers already had this session, so backspacing and retyping is instant.
+const goAnswers = new Map();
+const GO_ANSWERS_KEPT = 60;
+let goLastResults = [];
+
+function foldText(text) {
+  return String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function showGoResults(query, results) {
+  goShownFor = query;
+  goLastResults = results;
+  goResults.replaceChildren(...results.map((result) => {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.textContent = result.displayName;
+    choice.addEventListener("click", () => chooseGoResult(result, query));
+    return choice;
+  }));
+}
 
 function chooseGoResult(result, query) {
   goResults.replaceChildren();
@@ -683,17 +716,15 @@ async function runGoSearch(query, { typed = false } = {}) {
     goMessage.textContent = "Searching Madrid…";
   }
   try {
-    const results = await searchPlaces(query);
+    let results = goAnswers.get(query);
+    if (!results) {
+      results = await searchPlaces(query);
+      goAnswers.set(query, results);
+      if (goAnswers.size > GO_ANSWERS_KEPT) goAnswers.delete(goAnswers.keys().next().value);
+    }
     // A slower answer to an earlier prefix must not replace a newer one.
     if (seq !== goSearchSeq) return;
-    goShownFor = query;
-    goResults.replaceChildren(...results.map((result) => {
-      const choice = document.createElement("button");
-      choice.type = "button";
-      choice.textContent = result.displayName;
-      choice.addEventListener("click", () => chooseGoResult(result, query));
-      return choice;
-    }));
+    showGoResults(query, results);
     goMessage.textContent = results.length ? "" : "Nothing found in Madrid";
   } catch (err) {
     if (seq === goSearchSeq) goMessage.textContent = `Could not search: ${err.message}`;
@@ -708,10 +739,21 @@ goQuery.addEventListener("input", () => {
   if (query.length < 3) {
     goSearchSeq += 1;
     goShownFor = null;
+    goLastResults = [];
     goResults.replaceChildren();
     goMessage.textContent = "";
     return;
   }
+  if (goAnswers.has(query)) {
+    void runGoSearch(query, { typed: true });
+    return;
+  }
+  // While the real answer is on its way, keep what is showing that still
+  // fits: typing "alcal" → "alcala" should not blank the list it already had.
+  const words = foldText(query).split(" ").filter(Boolean);
+  const still = goLastResults.filter((result) =>
+    words.every((word) => foldText(result.displayName).includes(word)));
+  if (still.length) showGoResults(null, still);
   goTypeTimer = setTimeout(() => void runGoSearch(query, { typed: true }), GO_TYPE_PAUSE_MS);
 });
 
@@ -773,12 +815,16 @@ function syncGoMarker() {
     return;
   }
   const at = [goPlace.lon, goPlace.lat];
+  const title = `Going to ${goPlace.name}`;
+  // render() calls this every time; touch the marker only when it moved.
+  if (goMarker?.getElement().title === title
+    && goMarker.getLngLat().lng === at[0] && goMarker.getLngLat().lat === at[1]) return;
   if (!goMarker) {
     goMarker = domMarker('<span aria-hidden="true"></span>', "go-pin", at, { anchor: "bottom" })
       .addTo(leafletMap);
   }
   goMarker.setLngLat(at);
-  goMarker.getElement().title = `Going to ${goPlace.name}`;
+  goMarker.getElement().title = title;
 }
 
 async function goHere(lngLat) {
@@ -1011,8 +1057,11 @@ function placeRouteRow(option, card, { primary = false } = {}) {
   return route;
 }
 
+// One formatter: building one per row on every render is measurable on a phone.
+const ARRIVAL_CLOCK = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+
 function arrivalClock(epochMs) {
-  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(epochMs));
+  return ARRIVAL_CLOCK.format(new Date(epochMs));
 }
 
 /** One more way there, laid out like a bus row: badge, what to do, a
@@ -1521,12 +1570,16 @@ let journeyLoad = null;
 async function loadJourneys({ force = false } = {}) {
   if (journeyLoad) {
     // A destination picked while a plan is out must not wait a whole minute.
-    if (force) journeyRerun = true;
+    // Anything else asking again — the location fix and the hub list can land
+    // within moments of each other — is answered by the plan already out
+    // rather than planned a second time.
+    if (force && destinationsKey(journeyDestinations()) !== journeyInFlightKey) journeyRerun = true;
     return journeyLoad;
   }
   if (!authSession || !myLocation) return;
   const destinations = journeyDestinations();
   if (destinations.length === 0) return;
+  journeyInFlightKey = destinationsKey(destinations);
   const cell = `${myLocation[0].toFixed(3)},${myLocation[1].toFixed(3)}`;
   if (!force && cell === journeyCell && Date.now() - journeyLoadedAt < 60_000) return;
   if (!journeyPayload) {
@@ -1571,8 +1624,23 @@ async function loadJourneys({ force = false } = {}) {
     }
     const limit = Math.max(...payloads.map((payload) => Number(payload.maxDestinations) || 1));
     journeyBatchSize = Math.min(12, Math.max(1, limit));
+    try {
+      localStorage.setItem(JOURNEY_BATCH_KEY, String(journeyBatchSize));
+    } catch {
+      // Private window: start from one again next time.
+    }
     render();
   } catch (err) {
+    if (err.kind === "bad_request" && journeyBatchSize > 1) {
+      journeyBatchSize = 1;
+      try {
+        localStorage.removeItem(JOURNEY_BATCH_KEY);
+      } catch {
+        // Nothing remembered to forget.
+      }
+      journeyRerun = true;
+      return;
+    }
     journeyInitialPending = false;
     statusEl.textContent = err.name === "AbortError"
       ? "Journey request timed out"
@@ -1591,6 +1659,10 @@ async function loadJourneys({ force = false } = {}) {
       scheduleJourneys({ force: true });
     }
   }
+}
+
+function destinationsKey(destinations) {
+  return destinations.map((place) => `${place.id}@${place.lat},${place.lon}`).join("|");
 }
 
 function scheduleJourneys({ force = false } = {}) {

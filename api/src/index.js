@@ -272,7 +272,8 @@ async function photonSearch(query, bias) {
     bbox: `${MADRID_BOX.west},${MADRID_BOX.south},${MADRID_BOX.east},${MADRID_BOX.north}`,
     ...(bias ? { lat: String(bias.lat), lon: String(bias.lon) } : {}),
   }).toString();
-  const response = await fetch(target, { headers: GEOCODER_HEADERS });
+  // A public server: when it is slow, Nominatim is the quicker answer.
+  const response = await fetch(target, { headers: GEOCODER_HEADERS, signal: AbortSignal.timeout(2_500) });
   if (!response.ok) throw new EmtError("upstream", `address search HTTP ${response.status}`);
   const body = await response.json();
   const seen = new Set();
@@ -517,7 +518,13 @@ function plannerSources(requestUrl, emt, ctx) {
     route: (line) => cachedRoute(requestUrl, emt, line, ctx),
     incidents: (line) => cachedIncidents(requestUrl, emt, line, ctx),
     walking: (body) => walkingMatrix(requestUrl, body, ctx),
-    bikes: () => cachedBikeStations(requestUrl, emt, ctx),
+    // The planner may answer before a cold read lands; waitUntil keeps the
+    // read alive so it still fills the cache for the next plan.
+    bikes: () => {
+      const read = cachedBikeStations(requestUrl, emt, ctx);
+      ctx.waitUntil(read.catch(() => {}));
+      return read;
+    },
   };
 }
 
