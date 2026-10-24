@@ -43,6 +43,7 @@ import { requestEmt, manageEmtAccount, accountRequired } from "./emt-account.js"
 import { getBikeTripDiagnostics, monitorBikeTrips } from "./trip-monitor.js";
 import { queryMetrics, recordEdgeMetric } from "./metrics.js";
 import { plan, withinDeadline } from "./journey-planner.js";
+import { loading, sharedLoad } from "./shared-load.js";
 
 // Must match the daily trigger in wrangler.toml.
 const KEEPALIVE_CRON = "17 4 * * *";
@@ -131,13 +132,11 @@ async function edgeCachedJson(requestUrl, key, ttl, load, ctx, emt, endpoint = "
 
   // Cache API writes happen after the response. Without an in-flight map, two
   // requests landing on the same warm isolate during that gap both call EMT.
-  // Share the loader promise; the map contains public data only.
+  // Share the load, not its promise (see shared-load.js); the map holds
+  // public data only.
   const loadKey = cacheKey.url;
-  if (edgeLoads.has(loadKey)) {
-    metric("coalesced");
-    return edgeLoads.get(loadKey);
-  }
-  const operation = (async () => {
+  if (loading(edgeLoads, loadKey)) metric("coalesced");
+  return sharedLoad(edgeLoads, loadKey, async () => {
     let fresh;
     try {
       fresh = await load();
@@ -160,13 +159,7 @@ async function edgeCachedJson(requestUrl, key, ttl, load, ctx, emt, endpoint = "
     if (ctx?.waitUntil) ctx.waitUntil(write);
     else await write;
     return fresh;
-  })();
-  edgeLoads.set(loadKey, operation);
-  try {
-    return await operation;
-  } finally {
-    if (edgeLoads.get(loadKey) === operation) edgeLoads.delete(loadKey);
-  }
+  });
 }
 
 /** Arrivals for journey planning: same upstream, longer memory, and tagged
