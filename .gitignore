@@ -5,3 +5,4 @@ node_modules/
 .wrangler/
 .local/
 *.har
+loadtest/.load/
