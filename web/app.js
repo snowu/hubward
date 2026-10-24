@@ -647,43 +647,89 @@ function renderGoForm() {
   document.getElementById("go-current-name").textContent = goPlace ? `To ${goPlace.name}` : "";
 }
 
-goForm.addEventListener("submit", async (event) => {
+/** Address search, biased towards where you are standing. The worker rounds
+ *  the bias to ~1km, so this gives away no more than that. */
+function searchPlaces(query) {
+  const near = myLocation ? `&lat=${myLocation[0].toFixed(4)}&lon=${myLocation[1].toFixed(4)}` : "";
+  return api(`/places/geocode?q=${encodeURIComponent(query)}${near}`);
+}
+
+// Search as you type: a pause this long counts as "show me what you have".
+const GO_TYPE_PAUSE_MS = 300;
+let goTypeTimer = null;
+let goSearchSeq = 0;
+let goShownFor = null;
+
+function chooseGoResult(result, query) {
+  goResults.replaceChildren();
+  goShownFor = null;
+  goQuery.value = "";
+  goQuery.blur();
+  goMessage.textContent = "";
+  setGoPlace({
+    // The first part of a geocoder's answer is the name; the rest is
+    // the district and city you already know you are in.
+    name: String(result.displayName).split(",")[0].trim().slice(0, 80) || query,
+    address: result.displayName, lat: Number(result.lat), lon: Number(result.lon),
+  });
+  window.scrollTo({ top: 0 });
+}
+
+async function runGoSearch(query, { typed = false } = {}) {
+  const seq = ++goSearchSeq;
+  const button = document.getElementById("go-search");
+  if (!typed) {
+    button.disabled = true;
+    goMessage.textContent = "Searching Madrid…";
+  }
+  try {
+    const results = await searchPlaces(query);
+    // A slower answer to an earlier prefix must not replace a newer one.
+    if (seq !== goSearchSeq) return;
+    goShownFor = query;
+    goResults.replaceChildren(...results.map((result) => {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.textContent = result.displayName;
+      choice.addEventListener("click", () => chooseGoResult(result, query));
+      return choice;
+    }));
+    goMessage.textContent = results.length ? "" : "Nothing found in Madrid";
+  } catch (err) {
+    if (seq === goSearchSeq) goMessage.textContent = `Could not search: ${err.message}`;
+  } finally {
+    if (!typed) button.disabled = false;
+  }
+}
+
+goQuery.addEventListener("input", () => {
+  clearTimeout(goTypeTimer);
+  const query = goQuery.value.trim();
+  if (query.length < 3) {
+    goSearchSeq += 1;
+    goShownFor = null;
+    goResults.replaceChildren();
+    goMessage.textContent = "";
+    return;
+  }
+  goTypeTimer = setTimeout(() => void runGoSearch(query, { typed: true }), GO_TYPE_PAUSE_MS);
+});
+
+goForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  clearTimeout(goTypeTimer);
   const query = goQuery.value.trim();
   if (query.length < 3) {
     goMessage.textContent = "Type at least three letters";
     return;
   }
-  const button = document.getElementById("go-search");
-  button.disabled = true;
-  goMessage.textContent = "Searching Madrid…";
-  try {
-    const results = await api(`/places/geocode?q=${encodeURIComponent(query)}`);
-    goResults.replaceChildren(...results.map((result) => {
-      const choice = document.createElement("button");
-      choice.type = "button";
-      choice.textContent = result.displayName;
-      choice.addEventListener("click", () => {
-        goResults.replaceChildren();
-        goQuery.value = "";
-        goQuery.blur();
-        goMessage.textContent = "";
-        setGoPlace({
-          // The first part of a geocoder's answer is the name; the rest is
-          // the district and city you already know you are in.
-          name: String(result.displayName).split(",")[0].trim().slice(0, 80) || query,
-          address: result.displayName, lat: Number(result.lat), lon: Number(result.lon),
-        });
-        window.scrollTo({ top: 0 });
-      });
-      return choice;
-    }));
-    goMessage.textContent = results.length ? "" : "Nothing found in Madrid";
-  } catch (err) {
-    goMessage.textContent = `Could not search: ${err.message}`;
-  } finally {
-    button.disabled = false;
+  // Results for exactly this text are already up: Go means the top one.
+  const first = goResults.querySelector("button");
+  if (first && goShownFor === query) {
+    first.click();
+    return;
   }
+  void runGoSearch(query);
 });
 document.getElementById("go-clear").addEventListener("click", () => {
   goResults.replaceChildren();
@@ -1849,7 +1895,7 @@ document.getElementById("place-search").addEventListener("click", async () => {
   button.disabled = true;
   placesMessage.textContent = "Searching Madrid…";
   try {
-    const results = await api(`/places/geocode?q=${encodeURIComponent(query)}`);
+    const results = await searchPlaces(query);
     placeSearchResults.replaceChildren(...results.map((result) => {
       const choice = document.createElement("button");
       choice.type = "button";
