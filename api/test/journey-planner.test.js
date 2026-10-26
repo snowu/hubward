@@ -393,6 +393,39 @@ describe("plan: choosing between rides", () => {
   });
 });
 
+describe("plan: several hubs in one request", () => {
+  // A busy corner: six lines, each with a platform either side of the street,
+  // all a short walk away and all going to the first hub. The only bus to the
+  // second hub, line 7, stops 500m away. Planned alone, the second hub gets
+  // its 7; planned after the first in the same request, it must still get it.
+  const busyCorner = () => {
+    const near = ["L1", "L2", "L3", "L4", "L5", "L6"].flatMap((line, i) => [
+      busStop(`${line}a`, 60 + i * 20, 40, [line]),
+      busStop(`${line}b`, 60 + i * 20, -40, [line]),
+    ]);
+    const boards = Object.fromEntries(near.map((s) => [s.stopId, board(s.stopId, s.lines[0].line, 240)]));
+    return world({
+      stops: [
+        ...near,
+        ...["L1", "L2", "L3", "L4", "L5", "L6"].map((line, i) => busStop(`H${i}`, 2700, i * 20, [line])),
+        busStop("seven", 0, 500, ["7"]),
+        busStop("W", 0, 3200, ["7"]),
+      ],
+      routes: { 7: route("7", [busStop("seven", 0, 500), busStop("W", 0, 3200)]) },
+      boards: { ...boards, seven: board("seven", "7", 300) },
+    });
+  };
+  const hakuna = hub(2700, 0, { id: "hakuna", name: "Hakuna" });
+  const work = hub(0, 3200, { id: "work", name: "Work" });
+  const linesTo = (result, id) => result.destinations.find((d) => d.destination.id === id)
+    .options.map((o) => o.firstLeg.line);
+
+  it("finds the same ride for a hub whether it is planned alone or after another", async () => {
+    expect(linesTo(await planFor(busyCorner(), [work], SUMMER_NOON, "paid"), "work")).toEqual(["7"]);
+    expect(linesTo(await planFor(busyCorner(), [hakuna, work], SUMMER_NOON, "paid"), "work")).toEqual(["7"]);
+  });
+});
+
 describe("plan: walking to the first stop", () => {
   // Four stops on line A; "near" is 300m across the map but 1300m on foot.
   const stops = [
