@@ -191,8 +191,9 @@ export function prioritizeAccessStops(candidates, destinationGroups, maxStops = 
     selectedIds.add(id);
     selected.push(stop);
   };
-  for (const destinations of destinationGroups ?? []) {
+  const reserved = (destinationGroups ?? []).map((destinations) => {
     const seen = new Set();
+    const wanted = [];
     for (const destinationLine of (destinations ?? []).flatMap((stop) => stop.lines ?? [])) {
       const identity = lineIdentity(destinationLine);
       if (!identity || seen.has(identity)) continue;
@@ -200,15 +201,32 @@ export function prioritizeAccessStops(candidates, destinationGroups, maxStops = 
       // Two per line, not one: a line's two directions are different platforms,
       // often across the street from each other, and only one of them is going
       // your way. `candidates` arrives sorted by walking distance.
-      (candidates ?? [])
+      wanted.push(...(candidates ?? [])
         .filter((candidate) => (candidate.lines ?? [])
           .some((line) => linesMatch(line, destinationLine)))
-        .slice(0, 2)
-        .forEach(add);
+        .slice(0, 2));
     }
-  }
+    return wanted;
+  });
+  // Hubs take turns. One request plans every hub, and the first hub's lines
+  // used to take every slot before the second was asked: at Calle de Anastro
+  // a hub served by six local lines left nothing for the 7 to Work, which
+  // then read "No route" — the same hub planned on its own found it.
+  interleave(reserved).forEach(add);
   for (const candidate of candidates ?? []) add(candidate);
   return selected;
+}
+
+/** [a1, a2, a3], [b1] → [a1, b1, a2, a3]: one from each list in turn, so a
+ *  budget shared by several hubs is not spent on the first before the next
+ *  is asked. */
+export function interleave(lists) {
+  const queues = (lists ?? []).map((list) => [...(list ?? [])]);
+  const merged = [];
+  while (queues.some((queue) => queue.length)) {
+    for (const queue of queues) if (queue.length) merged.push(queue.shift());
+  }
+  return merged;
 }
 
 export function linesAt(stops) {
@@ -478,7 +496,7 @@ function plannerLocation(value, name) {
 function prioritizedRouteCodes(originStops, destinationGroups, max = 20) {
   const origin = uniqueLineCodes(originStops);
   const destinations = destinationGroups.map(uniqueLineCodes);
-  const common = destinations.flatMap((codes) => codes.filter((code) => origin.includes(code)));
+  const common = interleave(destinations.map((codes) => codes.filter((code) => origin.includes(code))));
   const ordered = [...new Set(common)];
   const queues = [origin, ...destinations].map((codes) => [...codes]);
   while (ordered.length < max && queues.some((queue) => queue.length)) {
@@ -724,13 +742,12 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     // One stop per distinct second leg, so the budget is not spent verifying
     // three variants of the same line while the one line actually running goes
     // unchecked and is therefore thrown away.
+    // Hubs take turns here too, as they do for boarding stops.
     const perLine = new Map();
-    for (const item of planned) {
-      for (const option of item.options) {
-        if (option.type !== "one_transfer") continue;
-        const code = String(option.secondLeg?.line ?? "");
-        if (code && !perLine.has(code)) perLine.set(code, String(option.transfer.toStop.stopId));
-      }
+    for (const option of interleave(planned.map((item) => item.options))) {
+      if (option.type !== "one_transfer") continue;
+      const code = String(option.secondLeg?.line ?? "");
+      if (code && !perLine.has(code)) perLine.set(code, String(option.transfer.toStop.stopId));
     }
     transferStopIds = [...new Set(perLine.values())].slice(0, transferChecks(budget, night));
     const transferLive = new Map(await Promise.all(transferStopIds.map(async (stopId) => {
