@@ -19,3 +19,10 @@ node "$root/tools/check-web.mjs" || {
   echo "Push anyway with --no-verify if you know better." >&2
   exit 1
 }
+
+node --test "$root/tools/install.test.mjs" >/dev/null || {
+  echo "" >&2
+  echo "pre-push blocked: web/install.js tests fail (node --test tools/install.test.mjs)." >&2
+  echo "Push anyway with --no-verify if you know better." >&2
+  exit 1
+}

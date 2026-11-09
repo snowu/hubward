@@ -1715,31 +1715,8 @@ accountSignout.addEventListener("click", async () => {
   }
 });
 
-/* Install from the menu, not only Chrome's own menu. Chromium fires
- * beforeinstallprompt only while it considers the app installable and not
- * yet installed, so the button exists exactly when an install can happen;
- * other browsers never fire it and never show it. */
-const appInstall = document.getElementById("app-install");
-let installPrompt = null;
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault(); // the button replaces Chrome's mini-infobar
-  installPrompt = event;
-  appInstall.hidden = window.matchMedia("(display-mode: standalone)").matches;
-});
-window.addEventListener("appinstalled", () => {
-  installPrompt = null;
-  appInstall.hidden = true;
-});
-appInstall.addEventListener("click", async () => {
-  if (!installPrompt) return;
-  const prompt = installPrompt;
-  // A prompt can be shown only once; if it is declined, Chrome offers again
-  // later with a new event, which brings the button back.
-  installPrompt = null;
-  appInstall.hidden = true;
-  await prompt.prompt();
-  if (accountMenu.open) accountMenu.close();
-});
+/* Installing the app (the banner and the account menu's "Install Hubward")
+ * is install.js's: it alone holds the browser's one-shot install event. */
 
 function renderMetrics(payload) {
   const rows = payload.rows ?? [];

@@ -30,7 +30,7 @@ jobs:
       - name: Cache-bust local assets
         run: |
           v="${GITHUB_SHA::8}"
-          sed -i "s#\(href\|src\)=\"\(style.css\|app.js\|appearance.js\|icon.svg\|apple-touch-icon.png\|icon-192.png\|manifest.webmanifest\)\"#\1=\"\2?v=$v\"#g" web/index.html
+          sed -i "s#\(href\|src\)=\"\(style.css\|app.js\|appearance.js\|install.js\|icon.svg\|apple-touch-icon.png\|icon-192.png\|manifest.webmanifest\)\"#\1=\"\2?v=$v\"#g" web/index.html
           sed -i "s#from \"./cache.js\"#from \"./cache.js?v=$v\"#" web/app.js
           sed -i "s#from \"./trips.js\"#from \"./trips.js?v=$v\"#" web/app.js
           sed -i "s#from \"./tracking.js\"#from \"./tracking.js?v=$v\"#" web/app.js
