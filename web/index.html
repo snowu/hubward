@@ -227,6 +227,10 @@
           <label class="field"><span>From</span><input id="tracking-edit-from" type="time" required /></label>
           <label class="field"><span>To</span><input id="tracking-edit-to" type="time" required /></label>
         </div>
+        <label id="tracking-edit-lead-field" class="field"><span>Minutes I need to reach the stop</span>
+          <input id="tracking-edit-lead" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="Off" />
+          <small class="muted">Set: “Leave now” when the bus is that far out. Empty: alert at 15 min.</small>
+        </label>
         <p id="tracking-edit-error" role="alert" hidden></p>
         <div class="dialog-actions">
           <button id="tracking-edit-cancel" type="button">Cancel</button>

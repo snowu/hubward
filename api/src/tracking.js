@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { EmtError } from "./errors.js";
 import { sendPush, validateSubscription, subscriptionId } from "./push.js";
-import { bikeTransition, busTransition, notificationText, watchStatus, nextStatusChange, validRadius, validSchedule, DEFAULT_RADIUS } from "./tracking-rules.js";
+import { bikeTransition, busTransition, notificationText, watchStatus, nextStatusChange, validLead, validRadius, validSchedule, DEFAULT_RADIUS, LEAD_MINUTES_MAX } from "./tracking-rules.js";
 import { bikeFeed, stopPoller } from "./pollers.js";
 
 export function validateWatch(input) {
@@ -22,9 +22,14 @@ export function validateWatch(input) {
   return { ...watch, ...(coordinates ? { coordinates } : {}), ...limits, id: JSON.stringify([watch.kind, watch.targetId, watch.line, watch.destination]) };
 }
 
-/** The radius and schedule a request asks for, of the keys it sends. */
+/** The radius, schedule and lead time a request asks for, of the keys it
+ *  sends. */
 export function watchLimits(input) {
   const limits = {};
+  if ("leadMinutes" in input) {
+    limits.leadMinutes = validLead(input.leadMinutes);
+    if (limits.leadMinutes === undefined) throw new EmtError("bad_request", `Choose 1–${LEAD_MINUTES_MAX} minutes to reach the stop`);
+  }
   if ("radius" in input) {
     limits.radius = validRadius(input.radius);
     if (limits.radius === undefined) throw new EmtError("bad_request", "Choose a radius of 500 m, 1 km or 2 km");
@@ -54,6 +59,19 @@ function watchCoordinates(value) {
   const [lon, lat] = value.map(Number);
   if (!Number.isFinite(lon) || !Number.isFinite(lat) || lon < -5 || lon > -2.5 || lat < 39.5 || lat > 41.5) return null;
   return [Math.round(lon * 1e6) / 1e6, Math.round(lat * 1e6) / 1e6];
+}
+
+/** What the service worker shows. One notification per watch: the tag is
+ *  the watch's, so a bus's quiet countdown updates, and the next bus after
+ *  it, replace what the phone already shows instead of stacking. */
+export function notificationPayload(watch, alert, now) {
+  return {
+    ...notificationText(watch, alert),
+    tag: `${watch.id}:${watch.kind === "bus" ? "bus" : "bikes"}`,
+    timestamp: now,
+    ...(alert.fresh === false ? { quiet: true } : {}),
+    target: { kind: watch.kind, id: watch.targetId, ...(watch.coordinates ? { coordinates: watch.coordinates } : {}) },
+  };
 }
 
 /** How long a push may wait for a sleeping phone. A bus alert is true until
@@ -364,11 +382,8 @@ export class TrackingRunner extends DurableObject {
           if (watch.delivered[deliveryKey].includes(device.id)) continue;
           if (this.watch(watch.id)?.revision !== watch.revision) break;
           try {
-            const status = await sendPush(this.env, device, {
-              ...notificationText(watch, alert),
-              tag: `${watch.id}:${alert.vehicle ?? "bikes"}`, timestamp: now,
-              target: { kind: watch.kind, id: watch.targetId, ...(watch.coordinates ? { coordinates: watch.coordinates } : {}) },
-            }, await pushOptions(watch, alert));
+            const status = await sendPush(this.env, device,
+              notificationPayload(watch, alert, now), await pushOptions(watch, alert));
             console.log(JSON.stringify({ event: "push_sent", kind: watch.kind, status }));
             if (status === 404 || status === 410) this.expire(device.id);
             else if (status < 200 || status >= 300) {

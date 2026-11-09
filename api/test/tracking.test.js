@@ -1,10 +1,10 @@
 import { env, runInDurableObject, runDurableObjectAlarm, createExecutionContext } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  bikeTransition, busTransition, notificationText, BIKE_INTERVAL, BUS_INTERVAL,
+  bikeTransition, busTransition, notificationText, alertWindow, validLead, BIKE_INTERVAL, BUS_INTERVAL,
   inSchedule, nextScheduleEdge, nextScheduleStart, validSchedule, watchStatus, madridTime, LOCATION_FRESH,
 } from "../src/tracking-rules.js";
-import { validateWatch, watchLimits, validLocation, DEVICE_PAUSE, DEVICE_FORGET } from "../src/tracking.js";
+import { validateWatch, watchLimits, validLocation, notificationPayload, DEVICE_PAUSE, DEVICE_FORGET } from "../src/tracking.js";
 import { bikeFeed, stopPoller } from "../src/pollers.js";
 import { sendPush, validateSubscription } from "../src/push.js";
 import worker from "../src/index.js";
@@ -92,14 +92,61 @@ describe("alert thresholds", () => {
     expect(initial.alerts).toHaveLength(0);
     const crossed = busTransition(initial.state, [bus(next)], busWatch, 121000);
     expect(crossed.alerts).toHaveLength(1);
-    expect(busTransition(crossed.state, [bus(next - 120)], busWatch, 241000).alerts).toHaveLength(0);
+    expect(crossed.alerts[0].fresh).toBe(true);
+    // The same bus counting down only ever updates quietly.
+    const fresh = (result) => result.alerts.filter((alert) => alert.fresh);
+    expect(fresh(busTransition(crossed.state, [bus(next - 120)], busWatch, 241000))).toHaveLength(0);
   });
-  it("alerts immediately below threshold, for each new vehicle, and on a later circuit", () => {
+  it("alerts immediately below threshold, for the soonest bus, and on a later circuit", () => {
     const first = busTransition({}, [bus(800), bus(850, "456")], busWatch, 1000);
-    expect(first.alerts).toHaveLength(2);
+    expect(first.alerts).toHaveLength(1);
+    expect(first.alerts[0]).toMatchObject({ fresh: true, minutes: 14, then: 15 });
     const gap = busTransition(first.state, [], busWatch, 121000);
     expect(busTransition(gap.state, [bus(700)], busWatch, 241000).alerts).toHaveLength(0);
     expect(busTransition(first.state, [bus(800)], busWatch, 31 * 60_000).alerts).toHaveLength(1);
+  });
+  it("updates one countdown quietly, only as its minutes drop", () => {
+    const first = busTransition({}, [bus(600)], busWatch, 1000);
+    const later = busTransition(first.state, [bus(480)], busWatch, 121000);
+    expect(later.alerts).toEqual([expect.objectContaining({ fresh: false, minutes: 8 })]);
+    // A delivery key per update, so a retry of "in 8" is not mistaken for "in 6".
+    expect(later.alerts[0].vehicle).not.toBe(first.alerts[0].vehicle);
+    expect(busTransition(later.state, [bus(470)], busWatch, 241000).alerts).toEqual([]);
+    expect(busTransition(later.state, [bus(560)], busWatch, 241000).alerts).toEqual([]);
+    expect(busTransition(later.state, [bus(350)], busWatch, 241000).alerts[0].minutes).toBe(6);
+  });
+  it("alerts, with sound, for the next bus once the first has gone", () => {
+    const first = busTransition({}, [bus(120), bus(700, "456")], busWatch, 1000);
+    const next = busTransition(first.state, [bus(580, "456")], busWatch, 121000);
+    expect(next.alerts).toEqual([expect.objectContaining({ fresh: true, minutes: 10, then: null })]);
+  });
+  it("alerts at the rider's own time to the stop, plus one poll, when a lead time is set", () => {
+    const leave = { ...busWatch, leadMinutes: 7 };
+    expect(alertWindow(leave)).toBe(9 * 60);
+    expect(alertWindow(busWatch)).toBe(900);
+    expect(busTransition({}, [bus(600)], leave, 1000).alerts).toEqual([]);
+    const alert = busTransition({}, [bus(530), bus(1300, "456")], leave, 1000).alerts[0];
+    expect(notificationText(leave, alert).body).toBe("Leave now · in 9 min · then 22 min · Home · stop 5138");
+    // Closer than the walk: just the countdown, the rider can judge whether to run.
+    expect(notificationText(leave, { ...alert, minutes: 5, then: null }).body).toBe("In 5 min · Home · stop 5138");
+  });
+  it("takes a lead time of 1–30 whole minutes, or none", () => {
+    expect([null, "", 1, 30, "7"].map(validLead)).toEqual([null, null, 1, 30, 7]);
+    for (const bad of [0, 31, 2.5, "soon"]) {
+      expect(validLead(bad)).toBeUndefined();
+      expect(() => watchLimits({ leadMinutes: bad })).toThrow();
+    }
+    expect(watchLimits({ leadMinutes: 8 })).toEqual({ leadMinutes: 8 });
+  });
+  it("keeps one notification per watch, and marks countdown updates quiet", () => {
+    const watch = { ...busWatch, id: "w" };
+    const [fresh] = busTransition({}, [bus(600)], watch, 1000).alerts;
+    const loud = notificationPayload(watch, fresh, 1000);
+    const quiet = notificationPayload(watch, { ...fresh, fresh: false, minutes: 8 }, 2000);
+    expect(quiet.tag).toBe(loud.tag);
+    expect(loud.quiet).toBeUndefined();
+    expect(quiet.quiet).toBe(true);
+    expect(notificationPayload({ ...bikeWatch, id: "b" }, { bikes: 1, change: 1 }, 1).tag).toBe("b:bikes");
   });
   it("names the bus in the title and leads the body with the wait", () => {
     const alert = busTransition({}, [{ ...bus(170), destination: "PLAZA CASTILLA" }], { ...busWatch, destination: "" }, 1000).alerts[0];
@@ -324,6 +371,30 @@ describe("shared pollers and per-user runners", () => {
     expect((await loner.stub.list()).watches).toEqual([]);
     const next = await runInDurableObject(stopPoller(env, busWatch.targetId), (_, ctx) => ctx.storage.getAlarm());
     expect(next % BUS_INTERVAL).toBe(0);
+  });
+  it("follows one bus with an alert and then a quiet update, one EMT call per poll", async () => {
+    const { stub } = await runner();
+    await env.KV.put("emt:token", "test-token");
+    const watch = { ...busWatch, targetId: "5139" };
+    await stub.add(watch);
+    let seconds = 600;
+    const boards = [];
+    const pushes = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).includes("/arrives/")) {
+        boards.push(String(url));
+        return Response.json({ code: "00", data: [{ Arrive: [{ line: "70", destination: "PLAZA", bus: 123, estimateArrive: seconds, DistanceBus: 800 }] }] });
+      }
+      pushes.push(new Headers(init.headers));
+      return new Response(null, { status: 201 });
+    });
+    await pollStop(watch.targetId);
+    seconds = 480;
+    await pollStop(watch.targetId);
+    seconds = 470; // still "8 min": nothing new to say
+    await pollStop(watch.targetId);
+    expect(boards).toHaveLength(3);
+    expect(pushes.map((headers) => headers.get("ttl"))).toEqual(["600", "480"]);
   });
   it("pauses a device not seen for five days and resumes when the app opens there", async () => {
     const { stub, subscription, user } = await runner();

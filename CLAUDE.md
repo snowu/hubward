@@ -139,7 +139,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 233 tests, no network
+npm test          # web smoke check, then vitest under workerd; 239 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -200,6 +200,19 @@ position the page reported (`POST /tracking/location`, ~100 m, latest only)
 opened the app" and counts for `LOCATION_FRESH` (12 h); a stale position
 pauses radius-limited watches. New watches default to 1 km; a watch without
 coordinates, or a user who never shared a position, behaves as before.
+
+**A bus watch can carry a lead time** (`leadMinutes`, 1–30): the minutes
+the rider needs to reach the stop, typed in by them, never routed. With one
+the alert window is that plus one poll (`alertWindow()`), and the body says
+"Leave now · in 9 min" while the bus is still at least that far out; without
+one it alerts at 15 min as before. **Each watch keeps one notification**
+(tag `<watch id>:bus`): the soonest bus in the window alerts with sound, and
+each later poll where its minutes drop sends a `quiet` update that the
+service worker shows with `renotify: false, silent: true`, so the phone
+shows one countdown instead of a stack. A second bus waits until it is the
+soonest, then alerts with sound; every alert names the bus after it ("then
+14 min"). Updates only go downwards, and the countdown moves in 2-minute
+steps because that is the poll.
 
 **Devices that stop opening the app stop costing anything.** Every page load
 (and a return to the app after a few hours in the background) re-registers

@@ -22,27 +22,78 @@ export function bikeTransition(previous = {}, station) {
   };
 }
 
+/** Without a lead time, a bus alerts once it is 15 minutes out. */
+export const BUS_ALERT_WINDOW = 900;
+/** A lead time is "minutes I need to reach the stop", set by the rider: they
+ *  know their own walk better than a router does. The alert window is that
+ *  plus one poll interval, so a 2-minute board cannot step straight past it. */
+export const LEAD_MARGIN_MINUTES = BUS_INTERVAL / 60_000;
+export const LEAD_MINUTES_MAX = 30;
+/** How far ahead the "then N min" bus may be: past this it is no help, and
+ *  EMT's 888888/999999 sentinels are not countdowns at all. */
+const THEN_HORIZON = 3600;
+
+export function validLead(value) {
+  if (value == null || value === "") return null;
+  const minutes = Number(value);
+  return Number.isInteger(minutes) && minutes >= 1 && minutes <= LEAD_MINUTES_MAX ? minutes : undefined;
+}
+
+export function alertWindow(watch) {
+  return Number.isInteger(watch?.leadMinutes)
+    ? (watch.leadMinutes + LEAD_MARGIN_MINUTES) * 60 : BUS_ALERT_WINDOW;
+}
+
+/** One notification per watch, about the soonest bus inside the window.
+ *
+ * A bus entering the window is `fresh`: it alerts with sound. While that same
+ * bus counts down, each poll where its minutes drop sends a quiet update that
+ * replaces the notification in place, so the phone shows one countdown
+ * instead of a stack. A second bus already inside the window waits its turn:
+ * it alerts, with sound, once it is the soonest, which is when it is the one
+ * to catch. Each alert names the bus after it too ("then 14 min").
+ */
 export function busTransition(previous = {}, arrivals, watch, now) {
   const seen = { ...previous.seen };
   // Keep vehicles through temporary board omissions and ETA corrections, but
   // allow the same vehicle to trigger again on a later circuit.
   for (const [key, time] of Object.entries(seen)) if (now - time > 30 * 60_000) delete seen[key];
+  const window = alertWindow(watch);
+  const keyOf = (bus) => (bus.vehicleId ? `${bus.vehicleId}:${bus.destination ?? ""}` : `unknown:${bus.destination ?? ""}`);
+  const matching = arrivals.filter((bus) => String(bus.line).toUpperCase() === watch.line &&
+    (!watch.destination || bus.destination === watch.destination) &&
+    Number.isFinite(bus.seconds) && bus.seconds >= 0 && bus.seconds <= THEN_HORIZON)
+    .sort((a, b) => a.seconds - b.seconds);
+  const inWindow = matching.filter((bus) => bus.seconds <= window);
   // Every refresh of a time is a storage write, so a sighting is refreshed
   // at most every five minutes; the 30-minute expiry absorbs the slack.
-  const eligible = arrivals.filter((bus) => String(bus.line).toUpperCase() === watch.line &&
-    (!watch.destination || bus.destination === watch.destination) &&
-    Number.isFinite(bus.seconds) && bus.seconds >= 0 && bus.seconds <= 900);
-  const alerts = [];
-  for (const bus of eligible) {
-    const key = bus.vehicleId ? `${bus.vehicleId}:${bus.destination ?? ""}` : `unknown:${bus.destination ?? ""}`;
-    if (!seen[key]) {
-      const route = `${watch.line}${bus.destination ? ` → ${bus.destination}` : ""}`;
-      const minutes = Math.ceil(bus.seconds / 60);
-      alerts.push({ minutes, destination: bus.destination ?? "", body: `Line ${route}: ${minutes} min away.`, vehicle: key });
-    }
-    if (!seen[key] || now - seen[key] >= 5 * 60_000) seen[key] = now;
+  for (const bus of inWindow) {
+    const key = keyOf(bus);
+    if (seen[key] && now - seen[key] >= 5 * 60_000) seen[key] = now;
   }
-  return { state: { seen }, alerts };
+  const lead = inWindow[0];
+  if (!lead) return { state: { seen }, alerts: [] };
+  const key = keyOf(lead);
+  const minutes = Math.ceil(lead.seconds / 60);
+  const after = matching.find((bus) => bus !== lead && keyOf(bus) !== key);
+  const alert = {
+    minutes, destination: lead.destination ?? "",
+    then: after ? Math.ceil(after.seconds / 60) : null,
+    body: `Line ${watch.line}${lead.destination ? ` → ${lead.destination}` : ""}: ${minutes} min away.`,
+  };
+  let shown = previous.shown ?? null;
+  const alerts = [];
+  if (!seen[key]) {
+    seen[key] = now;
+    alerts.push({ ...alert, fresh: true, vehicle: key });
+    shown = { vehicle: key, minutes };
+  } else if (shown?.vehicle === key && minutes < shown.minutes) {
+    // Only ever downwards: a re-estimate pushing the bus back a minute is not
+    // worth waking the screen for, and it catches up on the next drop.
+    alerts.push({ ...alert, fresh: false, vehicle: `${key}@${minutes}` });
+    shown = { vehicle: key, minutes };
+  }
+  return { state: { seen, ...(shown ? { shown } : {}) }, alerts };
 }
 
 /** EMT signs destinations in capitals ("PLAZA CASTILLA"); a notification
@@ -68,9 +119,14 @@ export function notificationText(watch, alert) {
     };
   }
   const destination = displayCase(alert.destination || watch.destination);
+  // "Leave now" while the bus is still at least the rider's own walk away;
+  // past that it is just the countdown, and they can judge whether to run.
+  const wait = alert.minutes <= 0 ? "Due now"
+    : Number.isInteger(watch.leadMinutes) && alert.minutes >= watch.leadMinutes ? `Leave now · in ${alert.minutes} min`
+      : `In ${alert.minutes} min`;
   return {
     title: destination ? `${watch.line} → ${destination}` : `Line ${watch.line}`,
-    body: `${alert.minutes <= 0 ? "Due now" : `In ${alert.minutes} min`} · ${where}`,
+    body: [wait, alert.then != null ? `then ${alert.then} min` : "", where].filter(Boolean).join(" · "),
   };
 }
 

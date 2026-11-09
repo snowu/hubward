@@ -29,9 +29,11 @@ self.addEventListener("push", (event) => {
       icon: new URL("icon-192.png", self.registration.scope).href,
       badge: new URL("badge-96.png", self.registration.scope).href,
       tag: message?.tag || "hubwise-update",
-      // A bike station reuses its tag, so a second alert would otherwise
-      // replace the first without a sound.
-      renotify: true,
+      // Each watch keeps one notification. A new bus, or a rack's new count,
+      // replaces it with a sound; a bus counting down ("in 7 min", "in 5")
+      // replaces it quietly.
+      renotify: message?.quiet !== true,
+      silent: message?.quiet === true,
       timestamp: Number.isFinite(message?.timestamp) ? message.timestamp : Date.now(),
       data: { target: message?.target },
       // A tap walks you there (through Hubward); the button just opens the stop.

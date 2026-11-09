@@ -6147,6 +6147,8 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
   }
   if (event.data?.type !== "push") return;
   const message = event.data.message ?? {};
+  // A quiet update only refreshes a banner already up; it never raises one.
+  if (message.quiet && pushBanner.hidden) return;
   document.getElementById("push-banner-title").textContent = message.title || "Hubward";
   document.getElementById("push-banner-body").textContent = message.body || "";
   pushBannerTarget = message.target;
@@ -6154,6 +6156,7 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
   // A header scrolled out of view leaves the banner at the top of the screen.
   const headerBottom = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
   pushBanner.style.top = `${Math.max(12, headerBottom + 8)}px`;
+  if (message.quiet) return;
   hidePushBanner();
   pushBanner.hidden = false;
   navigator.vibrate?.(200);

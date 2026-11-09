@@ -314,14 +314,16 @@ export function createTracking({ api, signedIn, changed, locate = () => null, po
     return "Paused";
   }
 
-  /** "Within 1 km · Mo Tu We 15:00–18:00", or "Anywhere, any time". */
+  /** "Within 1 km · Mo Tu We 15:00–18:00", or "Anywhere, any time", plus
+   *  "· 7 min to the stop" when a bus watch has a lead time. */
   function limitsText(watch) {
     const where = watch.radius ? `Within ${distance(watch.radius)}` : "Anywhere";
+    const lead = watch.kind === "bus" && watch.leadMinutes ? ` · ${watch.leadMinutes} min to the stop` : "";
     const s = watch.schedule;
-    if (!s) return `${where}, any time`;
+    if (!s) return `${where}, any time${lead}`;
     const days = s.days.length === 7 ? "every day"
       : [1, 2, 3, 4, 5, 6, 0].filter((d) => s.days.includes(d)).map((d) => DAY_NAMES[d]).join(" ");
-    return `${where} · ${days} ${s.from}–${s.to}`;
+    return `${where} · ${days} ${s.from}–${s.to}${lead}`;
   }
 
   // The editor dialog lives in index.html; it is filled per watch here.
@@ -335,6 +337,8 @@ export function createTracking({ api, signedIn, changed, locate = () => null, po
     hours: document.getElementById("tracking-edit-hours"),
     from: document.getElementById("tracking-edit-from"),
     to: document.getElementById("tracking-edit-to"),
+    leadField: document.getElementById("tracking-edit-lead-field"),
+    lead: document.getElementById("tracking-edit-lead"),
     error: document.getElementById("tracking-edit-error"),
     save: document.getElementById("tracking-edit-save"),
     watch: null,
@@ -374,6 +378,7 @@ export function createTracking({ api, signedIn, changed, locate = () => null, po
         id: watch.id,
         radius: radius ? Number(radius) : null,
         schedule: days.length ? { days, from: editor.from.value, to: editor.to.value } : null,
+        ...(watch.kind === "bus" ? { leadMinutes: editor.lead.value ? Number(editor.lead.value) : null } : {}),
       }) });
       watches = data.watches;
       editor.dialog.close();
@@ -401,6 +406,8 @@ export function createTracking({ api, signedIn, changed, locate = () => null, po
     for (const b of editor.days.querySelectorAll("button")) b.setAttribute("aria-pressed", String(days.includes(Number(b.dataset.day))));
     editor.from.value = watch.schedule?.from ?? "15:00";
     editor.to.value = watch.schedule?.to ?? "18:00";
+    editor.leadField.hidden = watch.kind !== "bus";
+    editor.lead.value = watch.leadMinutes ?? "";
     editor.error.hidden = true;
     showHours();
     editor.dialog.showModal();
