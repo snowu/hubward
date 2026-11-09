@@ -3238,9 +3238,7 @@ function liveBusIcon(bus) {
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 56 56");
   svg.setAttribute("aria-hidden", "true");
-  const bearing = Number.isFinite(bus.bearing) ? Number(bus.bearing) : 0;
   const vehicle = document.createElementNS(ns, "g");
-  vehicle.setAttribute("transform", `rotate(${bearing} 28 28)`);
 
   const body = document.createElementNS(ns, "rect");
   body.setAttribute("class", "live-bus-body");
@@ -3259,21 +3257,45 @@ function liveBusIcon(bus) {
   screen.setAttribute("height", "8");
   screen.setAttribute("rx", "4");
 
-  // Along the body, and never upside down: the label sits at bearing − 90,
-  // so add half a turn whenever that lands in the unreadable half.
-  const onScreen = (((bearing - 90) % 360) + 360) % 360;
-  const label = onScreen > 90 && onScreen < 270 ? 90 : -90;
   const number = document.createElementNS(ns, "text");
   number.setAttribute("class", "live-bus-number");
   number.setAttribute("x", "28");
   number.setAttribute("y", "32");
-  number.setAttribute("transform", `rotate(${label} 28 32)`);
   number.textContent = bus.line;
 
   vehicle.append(body, screen, number);
   svg.append(vehicle);
+  svg.busVehicle = vehicle;
+  svg.busNumber = number;
+  svg.busLine = bus.line;
+  orientBusIcon(svg, Number.isFinite(bus.bearing) ? Number(bus.bearing) : 0);
   return svg;
 }
+
+/** Turn an icon built by liveBusIcon() to a heading, in place. The icon is
+ *  built once per vehicle and turned here on every poll and every animation
+ *  frame: rebuilding it each time threw away the node mid-glide. */
+function orientBusIcon(svg, bearing) {
+  if (!svg?.busVehicle || !Number.isFinite(bearing)) return;
+  svg.busVehicle.setAttribute("transform", `rotate(${bearing} 28 28)`);
+  // Along the body, and never upside down: the label sits at bearing − 90,
+  // so add half a turn whenever that lands in the unreadable half.
+  const onScreen = (((bearing - 90) % 360) + 360) % 360;
+  const label = onScreen > 90 && onScreen < 270 ? 90 : -90;
+  svg.busNumber.setAttribute("transform", `rotate(${label} 28 32)`);
+}
+
+/** The icon a live-bus marker already holds, rebuilt only if its line
+ *  changed (one vehicle can switch lines between runs). */
+function busMarkerIcon(marker, bus) {
+  const current = marker.getElement().querySelector("svg");
+  if (current?.busLine === bus.line) return current;
+  const fresh = liveBusIcon(bus);
+  marker.getElement().replaceChildren(fresh);
+  return fresh;
+}
+
+const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
 
 function movementBearing([oldLon, oldLat], [newLon, newLat]) {
   const dx = (newLon - oldLon) * Math.cos((oldLat * Math.PI) / 180);
@@ -3534,14 +3556,27 @@ function trackBearingAt(track, progress) {
 function animateBusOnTrack(marker, track, fromProgress, toProgress) {
   const animationId = (marker.busAnimationId ?? 0) + 1;
   marker.busAnimationId = animationId;
+  const icon = marker.getElement().querySelector("svg");
+  // Heading comes from the stretch of path the bus is on *now*, frame by
+  // frame, so it turns as it rounds a corner instead of sliding round it
+  // pointing the old way and snapping at the next poll.
+  const place = (progress) => {
+    marker.setLngLat(trackCoordinateAt(track, progress));
+    const bearing = trackBearingAt(track, progress);
+    if (Number.isFinite(bearing)) {
+      orientBusIcon(icon, bearing);
+      marker.busBearing = bearing;
+    }
+  };
+  if (reducedMotion?.matches) {
+    place(toProgress);
+    return;
+  }
   const started = performance.now();
   const duration = BUS_MAP_REFRESH_MS - 500;
   const frame = (now) => {
     const ratio = Math.min(1, (now - started) / duration);
-    const coordinate = trackCoordinateAt(
-      track, fromProgress + (toProgress - fromProgress) * ratio,
-    );
-    marker.setLngLat(coordinate);
+    place(fromProgress + (toProgress - fromProgress) * ratio);
     if (ratio < 1 && liveBusMarkers.get(marker.busKey) === marker
       && marker.busAnimationId === animationId) requestAnimationFrame(frame);
   };
@@ -3551,6 +3586,10 @@ function animateBusOnTrack(marker, track, fromProgress, toProgress) {
 function animateBusMarker(marker, from, to, duration = BUS_MAP_REFRESH_MS - 500) {
   const animationId = (marker.busAnimationId ?? 0) + 1;
   marker.busAnimationId = animationId;
+  if (reducedMotion?.matches) {
+    marker.setLngLat(to);
+    return;
+  }
   const started = performance.now();
   const frame = (now) => {
     const progress = Math.min(1, (now - started) / duration);
@@ -3740,6 +3779,8 @@ function rebuildLiveBusMarkers() {
       // it, even when EMT has sent nothing new.
       const upgraded = marker.busProgress == null && progress != null;
       if (Number(bus.fetchedAt) <= Number(marker.busFetchedAt) && !upgraded) continue;
+      // Before the glide, so the animation turns the icon that stays.
+      busMarkerIcon(marker, bus);
       if (track) {
         const from = marker.busProgress ?? progress;
         // A correction this large is EMT re-locking the vehicle, not a bus
@@ -3759,7 +3800,8 @@ function rebuildLiveBusMarkers() {
       marker.busFetchedAt = bus.fetchedAt;
       marker.busSourceStopId = bus.sourceStopId;
       marker.busRouteKey = shown?.key ?? null;
-      marker.getElement().replaceChildren(liveBusIcon(bus));
+      // Orient before the glide starts, which then keeps turning it.
+      orientBusIcon(busMarkerIcon(marker, bus), marker.busBearing);
       syncRouteSelectionStyles();
       continue;
     }

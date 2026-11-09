@@ -1,5 +1,20 @@
 # Bus marker + active-lines board — implementation spec
 
+> **Status (2026-11-09): implemented**, in `edfff34` and #48's PR, against
+> MapLibre rather than the Leaflet sketched below. Where the app differs from
+> this spec, it is on purpose:
+>
+> - **The line number runs along the body**, flipped so it is never upside
+>   down, instead of an upright roof plate (`liveBusIcon()` explains why).
+> - **Heading is the route's own direction** where the bus is, every animation
+>   frame (`trackBearingAt()`), not the GPS fixes: EMT's fix freezes for
+>   minutes and then jumps (see CLAUDE.md, "`DistanceBus` is the only position
+>   that moves").
+> - **Position is `DistanceBus` along the route**, not a projected fix.
+>
+> The board is `renderRouteLegend()`. Reduced motion snaps buses to each
+> poll. The open questions in §7 are still open.
+
 Design decisions from a mockup session. Everything here is meant to be dropped into the
 real app; the mockup's fake map, fake routes and fake ETAs are not part of it.
 

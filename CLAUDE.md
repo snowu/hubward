@@ -868,7 +868,10 @@ is most stale), and manually per-card or all at once.
 14. **Buses are placed by distance, not by their GPS fix**, and glide between
    polls along the compiled path — see the arrivals notes above for why the fix
    is unusable. Heading comes from the path's own tangent, since two fixes
-   minutes apart say nothing about which way a bus points.
+   minutes apart say nothing about which way a bus points, and it is taken
+   again on every animation frame (`orientBusIcon()`), so a bus turns as it
+   rounds a corner. The icon is built once per vehicle and turned in place.
+   With `prefers-reduced-motion` buses snap to each poll instead of gliding.
 15. **A bus popup answers "where is it going".** Destination leads, because
    that is the question. Then the stop this estimate belongs to — the stop the
    route was opened from, so the one you are standing at — with a ticking
