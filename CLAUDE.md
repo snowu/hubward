@@ -139,7 +139,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 243 tests, no network
+npm test          # web smoke check, then vitest under workerd; 245 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -468,7 +468,10 @@ and carries what the page actually needs:
 differ (005→5, 070→70, 523→N23, 833→SE833) and arrivals report the *label*.
 Area search sends the same pair per line but no hours. A bare code cannot be
 turned into a label by trimming zeros; if you only have the code, show it.
-`lineEntry()` in `emt.js` normalises both shapes — detail objects and area
+In the worker, `linesMatch()` in the Planner compares lines by code
+*or* label: route legs carry the code, boards the label, and comparing codes
+alone silently dropped every transfer onto S10 (881) and every night-line leg
+until 2026-11-09. `lineEntry()` in `emt.js` normalises both shapes — detail objects and area
 search's bare codes — into one record, and `normaliseLine()` in `app.js`
 additionally tolerates the string-only shape older devices cached.
 

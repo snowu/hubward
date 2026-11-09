@@ -564,6 +564,42 @@ describe("plan: every line at the destination gets a stop", () => {
   });
 });
 
+describe("plan: lines whose code is not their label", () => {
+  // Work, 2026-11-09: 70 → S10 at Plaza Castilla was found, its board read
+  // (S10 due in 103s and 343s), and then dropped — the leg carried EMT's code
+  // "881", the board said "S10", and they were compared as strings.
+  const coded = (s, code, label) => ({ ...s, lines: [{ line: code, label }] });
+  const plaza = () => world({
+    stops: [
+      busStop("O", 100, 0, ["70"]),
+      busStop("X", 2000, 0, ["70"]), coded(busStop("Y", 2000, 50), "881", "S10"),
+      coded(busStop("D", 4000, 50), "881", "S10"),
+    ],
+    routes: {
+      70: route("70", [busStop("O", 100, 0), busStop("X", 2000, 0)]),
+      881: route("881", [busStop("Y", 2000, 50), busStop("D", 4000, 50)]),
+    },
+    boards: { O: board("O", "70", 120), Y: board("Y", "S10", 900) },
+  });
+
+  it("keeps a transfer onto a line the board names by label", async () => {
+    const options = optionsOf(await planFor(plaza(), [hub(4000, 50)], SUMMER_NOON));
+    expect(options.map((o) => [o.firstLeg.label, o.secondLeg?.label])).toEqual([["70", "S10"]]);
+    expect(options[0].secondLeg.arrivals).toEqual([900]);
+  });
+
+  it("matches a night line's board by label on the first leg too", async () => {
+    const w = world({
+      stops: [coded(busStop("O", 100, 0), "502", "N2"), coded(busStop("D", 3000, 0), "502", "N2")],
+      routes: { 502: route("502", [busStop("O", 100, 0), busStop("D", 3000, 0)]) },
+      boards: { O: board("O", "N2", 400) },
+    });
+    const [option] = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_1AM));
+    expect(option.firstLeg.arrivals).toEqual([400]);
+    expect(option.estimatedSeconds).not.toBeNull();
+  });
+});
+
 describe("plan: a failing read costs only its own options", () => {
   // Two direct lines from two different stops: C from O1, E from O2.
   const twoLines = (failing) => world({

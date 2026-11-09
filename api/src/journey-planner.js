@@ -41,9 +41,22 @@ function lineIdentity(entry) {
   return /^\d+$/.test(code) ? code.replace(/^0+(?=\d)/, "") : code;
 }
 
+/** Every name a line goes by: its EMT code and the label it is signed with.
+ *  They differ for night and special lines (502 is N2, 881 is S10), and a
+ *  board names a bus by label while a route leg carries the code. */
+function lineIdentities(entry) {
+  return [entry?.line, entry?.label]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => lineIdentity({ line: value }));
+}
+
+/** Same line, whichever of code or label each side carries. Comparing codes
+ *  alone dropped 70 → S10 at Plaza Castilla: the leg said "881", the board
+ *  "S10", and the transfer was thrown away as having no bus. The page's
+ *  firstLegTimes() has always matched on both. */
 export function linesMatch(a, b) {
-  const left = lineIdentity(a);
-  return Boolean(left) && left === lineIdentity(b);
+  const left = new Set(lineIdentities(a));
+  return lineIdentities(b).some((identity) => left.has(identity));
 }
 
 /** The first bus at or after `readyAt`, else one headway past the last one
