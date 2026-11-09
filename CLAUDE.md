@@ -153,7 +153,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 248 tests, no network
+npm test          # web smoke check, then vitest under workerd; 251 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -859,7 +859,15 @@ is most stale), and manually per-card or all at once.
    DETOUR, NO_SERVICE… — then the title, desvío/corte/huelga against
    horarios/refuerzo; unclear counts). A "Cambio de Horarios" notice sank
    Work's fastest option and was labelled a detour on the card; the card now
-   says "ⓘ Notice" for those.
+   says "ⓘ Notice" for those. EMT sends effects as numbered Spanish labels
+   ("07 - Modificación del servicio"), not GTFS enums, so `effectName()` maps
+   the words (desvío → DETOUR, sin servicio → NO_SERVICE…) and never trusts
+   EMT's own numbering.
+
+   **By day, night lines get no route slots.** Between 07:00 and 22:59
+   Madrid time `routeWorthyCodes()` leaves N1–N28 out of the route budget;
+   at Work at 19:55 four of 24 slots went to them and the S10, the usual
+   second leg from Plaza Castilla, was never fetched.
 
    **A bus due up to `CATCH_SLACK_SECONDS` (60s) before the rider would reach
    the stop still counts as caught**, in `nextDeparture()` and its page copy

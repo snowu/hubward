@@ -140,9 +140,9 @@ export function compareJourneyOptions(a, b) {
     || a.score - b.score;
 }
 
-/** GTFS effects EMT stamps on an incident that change the ride itself, and
- *  those that never do. Everything else (MODIFIED_SERVICE, OTHER_EFFECT,
- *  UNKNOWN_EFFECT, none at all) is decided by the title. */
+/** GTFS effects that change the ride itself, and those that never do.
+ *  Everything else ("Modificación del servicio", OTHER_EFFECT, none at all)
+ *  is decided by the words. */
 const DISRUPTING_EFFECTS = new Set(["NO_SERVICE", "REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR", "STOP_MOVED"]);
 const HARMLESS_EFFECTS = new Set(["NO_EFFECT", "ADDITIONAL_SERVICE", "ACCESSIBILITY_ISSUE"]);
 const DISRUPTING_WORDS = /desv[ií]o|desviad|cort[ea]|cortad|huelga|suspen|interrup|obras|cierre|cerrad|retras|sin servicio|no (presta|realiza)|parada provisional|traslad/i;
@@ -157,13 +157,36 @@ const NOTICE_WORDS = /horario|ampliaci[oó]n|refuerzo|informaci[oó]n|nueva l[i�
  * wrongly demoting a ride costs less than recommending a diverted one.
  */
 export function incidentDisrupts(incident) {
-  const effect = String(incident?.effect ?? "").toUpperCase();
-  if (DISRUPTING_EFFECTS.has(effect)) return true;
-  if (HARMLESS_EFFECTS.has(effect)) return false;
-  const title = String(incident?.title ?? "");
-  if (DISRUPTING_WORDS.test(title)) return true;
-  if (NOTICE_WORDS.test(title)) return false;
+  const effect = String(incident?.effect ?? "");
+  const named = effectName(effect);
+  if (DISRUPTING_EFFECTS.has(named)) return true;
+  if (HARMLESS_EFFECTS.has(named)) return false;
+  // EMT words its effect in Spanish ("04 - Desvío"), so the words that decide
+  // a title decide an effect too; the effect is read first.
+  for (const text of [effect, String(incident?.title ?? "")]) {
+    if (DISRUPTING_WORDS.test(text)) return true;
+    if (NOTICE_WORDS.test(text)) return false;
+  }
   return true;
+}
+
+/** The GTFS effect an incident names, from either form it arrives in: the
+ *  enum ("DETOUR") or EMT's numbered Spanish label ("07 - Modificación del
+ *  servicio", seen live 2026-11-09). EMT's numbers are its own list, not
+ *  GTFS's, so only the words are trusted, never the number. */
+function effectName(effect) {
+  const text = effect.toUpperCase().trim();
+  if (/^[A-Z_]+$/.test(text)) return text;
+  const words = text.replace(/^\d+\s*-\s*/, "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/SIN SERVICIO|SUSPEN/.test(words)) return "NO_SERVICE";
+  if (/REDUC/.test(words)) return "REDUCED_SERVICE";
+  if (/RETRAS/.test(words)) return "SIGNIFICANT_DELAYS";
+  if (/DESVI/.test(words)) return "DETOUR";
+  if (/TRASLAD|PARADA PROVISIONAL/.test(words)) return "STOP_MOVED";
+  if (/AMPLIA|REFUERZO|ADICIONAL/.test(words)) return "ADDITIONAL_SERVICE";
+  if (/SIN EFECTO|NINGUN/.test(words)) return "NO_EFFECT";
+  if (/ACCESIBILIDAD/.test(words)) return "ACCESSIBILITY_ISSUE";
+  return text;
 }
 
 /** Collapse candidates that represent the same journey as experienced by the user.
@@ -557,9 +580,30 @@ function plannerLocation(value, name) {
   return { lat, lon };
 }
 
-function prioritizedRouteCodes(originStops, destinationGroups, max = 20) {
-  const origin = uniqueLineCodes(originStops);
-  const destinations = destinationGroups.map(uniqueLineCodes);
+/** Night lines are signed N1–N28 (codes 501–528). They run from about 23:00
+ *  to 06:00, so between 07:00 and 22:59 Madrid time their routes can only
+ *  take route slots from lines that run. */
+const NIGHT_LINE = /^N\d+$/i;
+const NIGHT_LINES_FROM_HOUR = 23;
+const NIGHT_LINES_UNTIL_HOUR = 7;
+function nightLinesRunning(now) {
+  const hour = madridHour(now);
+  return hour >= NIGHT_LINES_FROM_HOUR || hour < NIGHT_LINES_UNTIL_HOUR;
+}
+
+/** Codes of lines at these stops worth a route slot: night-only lines are
+ *  left out by day. At Work at 19:55 on 2026-11-09, N2, N22, N1 and N24 took
+ *  four of 24 slots and the S10 (881), the rider's usual second leg from Plaza
+ *  Castilla, was never fetched, so 70 → S10 could not be built at all. */
+function routeWorthyCodes(stops, nightLines) {
+  return [...new Set(linesAt(stops)
+    .filter((item) => nightLines || !NIGHT_LINE.test(String(item.label ?? "")))
+    .map((item) => item.code))];
+}
+
+function prioritizedRouteCodes(originStops, destinationGroups, max = 20, nightLines = true) {
+  const origin = routeWorthyCodes(originStops, nightLines);
+  const destinations = destinationGroups.map((stops) => routeWorthyCodes(stops, nightLines));
   const common = interleave(destinations.map((codes) => codes.filter((code) => origin.includes(code))));
   const ordered = [...new Set(common)];
   const queues = [origin, ...destinations].map((codes) => [...codes]);
@@ -844,7 +888,8 @@ export async function plan(body, { sources, tier, now = new Date() }) {
   // Active lines get the scarce route slots first; static lines remain loaded
   // for the fallback used when EMT supplied no live boards at all.
   const plannerOrigins = activeOriginStops.length ? activeOriginStops : originStops;
-  const routeCodes = prioritizedRouteCodes(plannerOrigins, destinationStops, routeBudget(budget, night));
+  const routeCodes = prioritizedRouteCodes(plannerOrigins, destinationStops, routeBudget(budget, night),
+    nightLinesRunning(now));
   // One line's route failing costs the options on that line, not the plan:
   // boards and incidents are isolated the same way, and with the paid budget
   // there are up to 30 routes for one of them to fail.

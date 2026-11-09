@@ -99,6 +99,17 @@ describe("journey planner", () => {
     expect(incidentDisrupts({})).toBe(true);
   });
 
+  it("reads EMT's own numbered Spanish effects, as they arrive live", () => {
+    // Seen live 2026-11-09 on line 40.
+    expect(incidentDisrupts({ effect: "07 - Modificación del servicio",
+      title: "Cambio de Horarios. Afectada línea 40 de EMT." })).toBe(false);
+    // A detour said only in the effect still counts, whatever the title.
+    expect(incidentDisrupts({ effect: "04 - Desvío", title: "Afectada línea 27" })).toBe(true);
+    expect(incidentDisrupts({ effect: "01 - Sin servicio", title: "Cambio de horarios" })).toBe(true);
+    expect(incidentDisrupts({ effect: "05 - Servicio adicional", title: "Afectada línea 27" })).toBe(false);
+    expect(incidentDisrupts({ effect: "07 - Modificación del servicio", title: "Afectada línea 27" })).toBe(true);
+  });
+
   it("counts a bus due a few seconds before the rider reaches the stop as caught", () => {
     // Añastro, 2026-11-09: the 7 due in 367s, the walk 381s. Missing it by a
     // predicted 14 seconds meant planning around the next one, 25 minutes on.
@@ -632,6 +643,38 @@ describe("plan: lines whose code is not their label", () => {
     const [option] = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_1AM));
     expect(option.firstLeg.arrivals).toEqual([400]);
     expect(option.estimatedSeconds).not.toBeNull();
+  });
+});
+
+describe("plan: route slots by day go to lines that run by day", () => {
+  // Work, 19:55 on 2026-11-09: N2, N22, N1 and N24 took four of the 24 route
+  // slots, the S10's route was never fetched, and 70 → S10 could not be built.
+  const nightly = (n) => Array.from({ length: n }, (_, i) => ({ line: String(501 + i), label: `N${i + 1}` }));
+  const crowded = () => world({
+    stops: [
+      busStop("O", 100, 0, ["A"]),
+      busStop("X", 2000, 0, ["A"]),
+      { ...busStop("Y", 2000, 50), lines: [...nightly(10), { line: "881", label: "S10" }] },
+      { ...busStop("D", 4000, 50), lines: [...nightly(10), { line: "881", label: "S10" }] },
+    ],
+    routes: {
+      A: route("A", [busStop("O", 100, 0), busStop("X", 2000, 0)]),
+      881: route("881", [busStop("Y", 2000, 50), busStop("D", 4000, 50)]),
+    },
+    boards: { O: board("O", "A", 120), Y: board("Y", "S10", 900) },
+  });
+
+  it("skips night lines' routes by day, so a day line's transfer is found", async () => {
+    const w = crowded();
+    const options = optionsOf(await planFor(w, [hub(4000, 50)], SUMMER_NOON));
+    expect(options.map((o) => [o.firstLeg.line, o.secondLeg?.label])).toEqual([["A", "S10"]]);
+    expect(w.reads.route.filter((code) => Number(code) >= 501 && Number(code) <= 510)).toEqual([]);
+  });
+
+  it("still fetches night lines' routes at night", async () => {
+    const w = crowded();
+    await planFor(w, [hub(4000, 50)], SUMMER_1AM);
+    expect(w.reads.route).toContain("501");
   });
 });
 
