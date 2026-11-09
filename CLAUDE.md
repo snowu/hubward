@@ -139,7 +139,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 220 tests, no network
+npm test          # web smoke check, then vitest under workerd; 233 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -796,12 +796,20 @@ is most stale), and manually per-card or all at once.
    discarded — same single matrix call it always cost. `walkingReachable()`
    never filters down to nothing: in a sparse corner every stop can route past
    the gate, and an honest long walk beats "No route", so below
-   `JOURNEY_MIN_ORIGIN_STOPS` it simply takes the nearest on foot. Stops the
+   `JOURNEY_MIN_ACCESS_STOPS` it simply takes the nearest on foot. Stops the
    router had no distance for keep their place, and if the router is down the
    gate falls back to the straight-line radius.
 
-   The walk at the *destination* end is still straight-line, so a hub behind a
-   motorway reads as closer than it walks.
+   **The destination end is gated the same way.** Each destination's 25
+   nearest stops go through their own matrix call (from the hub, walking
+   taken as symmetric), `walkingReachable()` applies the hub's radius on
+   foot, and the 6 nearest *walked* are kept — so a hub behind a motorway or
+   railway no longer keeps six stops across the tracks and cuts the one on
+   its own side. That is one extra call per destination, run alongside the
+   origin's; hubs do not move and the matrix is edge-cached for 7 days on
+   its coordinates, so for saved hubs it is nearly always a hit. The walked
+   distance at both ends feeds `planJourney`'s score, the shown estimate and
+   `rankJourneySeconds()`.
 
    **A direct ride outranks every transfer, whatever the clock says.** A
    transfer is a second fare — about €0.70 without a subscription — and
@@ -971,9 +979,7 @@ the old one.
 Line colour is derived from the line code by FNV-1a, quantised into 24 hues
 with lightness and saturation each picked by a hash bit. A free-running hue put
 5 and 107 five degrees apart — colliding outright is fine, looking
-almost-the-same on a card listing six lines is not. (The docstring above
-`lineColor` still says "golden-angle rotation"; the code has been FNV-1a since,
-and the comment inside the function is the accurate one.)
+almost-the-same on a card listing six lines is not.
 The same colour is used for the line's label on a card, its chip in a popup,
 its route polyline and its en-route dots: same line, same colour, everywhere.
 

@@ -453,6 +453,58 @@ describe("plan: walking to the first stop", () => {
   });
 });
 
+describe("plan: walking from the last stop", () => {
+  // Two direct lines from the rider's corner. "behind" is 150m from the hub
+  // on the map but across a motorway, 1500m on foot; "beyond" is 400m away
+  // and walks 450m.
+  const motorway = (extra = {}) => world({
+    stops: [
+      busStop("oA", 100, 0, ["A"]), busStop("oB", 100, 20, ["B"]),
+      busStop("behind", 3000, 150, ["A"]), busStop("beyond", 3000, -400, ["B"]),
+    ],
+    routes: {
+      A: route("A", [busStop("oA", 100, 0), busStop("behind", 3000, 150)]),
+      B: route("B", [busStop("oB", 100, 20), busStop("beyond", 3000, -400)]),
+    },
+    boards: { oA: board("oA", "A", 300), oB: board("oB", "B", 300) },
+    walkM: { behind: 1500, beyond: 450 },
+    ...extra,
+  });
+
+  it("ranks the stop that is nearer on foot, not on the map", async () => {
+    const options = optionsOf(await planFor(motorway(), [hub(3000, 0)], SUMMER_NOON));
+    expect(options.map((o) => o.destinationStop.stopId)).toEqual(["beyond", "behind"]);
+    expect(options[0].destinationStop.walkMetres).toBe(450);
+  });
+
+  it("counts the walked distance in the arrival it shows", async () => {
+    const [beyond] = optionsOf(await planFor(motorway(), [hub(3000, 0)], SUMMER_NOON));
+    // 300s to the bus, one stop ridden (90s), 450m on foot.
+    expect(beyond.estimatedSeconds).toBe(Math.round(300 + 90 + 450 / 1.3));
+  });
+
+  it("falls back to the straight line when the walking router is down", async () => {
+    const result = await planFor(motorway({ walkingDown: true }), [hub(3000, 0)], SUMMER_NOON);
+    expect(optionsOf(result).map((o) => o.destinationStop.stopId)).toEqual(["behind", "beyond"]);
+    expect(result.calls.walking).toBe(0);
+  });
+
+  it("keeps a stop that is seventh on the map but nearest on foot", async () => {
+    // Six stops hug the hub across a railway; the 7 stops 300m away on this side.
+    const railway = ["X1", "X2", "X3", "X4", "X5", "X6"].map((line, i) =>
+      busStop(`r${i}`, 3200, 40 + i * 30, [line]));
+    const w = world({
+      stops: [busStop("o7", 100, 0, ["7"]), ...railway, busStop("seven", 3200, -300, ["7"])],
+      routes: { 7: route("7", [busStop("o7", 100, 0), busStop("seven", 3200, -300)]) },
+      boards: { o7: board("o7", "7", 240) },
+      walkM: { ...Object.fromEntries(railway.map((s) => [s.stopId, 900])), seven: 320 },
+    });
+    const result = await planFor(w, [hub(3200, 0)], SUMMER_NOON);
+    expect(optionsOf(result).map((o) => o.firstLeg.line)).toEqual(["7"]);
+    expect(result.calls.walking).toBe(2);
+  });
+});
+
 describe("plan: a failing read costs only its own options", () => {
   // Two direct lines from two different stops: C from O1, E from O2.
   const twoLines = (failing) => world({
