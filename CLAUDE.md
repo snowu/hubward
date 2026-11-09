@@ -28,6 +28,19 @@ Chrome matched the dead install and refused with "already installed". A
 path-scoped id is unique per app (Spritewright uses `/spritewright/` for the
 same reason). Changing it makes every installed copy a different app.
 
+**Installing works like Spritewright and Hex Lab** (`web/install.js`, ported
+from Spritewright's `pages/install.js`). It alone owns Chromium's one-shot
+`beforeinstallprompt` event: a banner (`#install-banner`, in `index.html`)
+offers the install a moment after load, "Not now" quiets it for 30 days under
+`hubward:installDismiss:/hubward/` (per app path, and a timestamp from the
+future does not count), and the account menu's "Install Hubward" stays
+available regardless. Declining in the browser's own dialog counts as "Not
+now"; an accepted or failed prompt clears the stamp. Nothing shows in
+standalone mode or in browsers that never fire the event. It also registers
+`sw.js` on load rather than only when alerts are switched on.
+`tools/install.test.mjs` (jsdom, run by `npm test` and the pre-push hook)
+holds Spritewright's cases against the real `index.html`.
+
 ## Scope
 
 - **In:** EMT Madrid city buses, and BiciMAD (same MobilityLabs API, same
@@ -47,6 +60,7 @@ web/                 static page, deployed to GitHub Pages. Holds no secrets.
   emt-account.js     connect-your-EMT-account dialog
   directions.js      walking-directions links
   appearance.js      theme + interface style, applied before first paint
+  install.js         install banner + account-menu Install button (Spritewright's, ported)
   sw.js              service worker: notifications only, no offline cache
   cache.js           localStorage read/write helpers
   trips.js           pure trip identity, ordering and incremental-merge helpers
@@ -320,7 +334,8 @@ from `web/index.html` with jsdom, stubs only what a CDN would have supplied
 (MapLibre, the Supabase SDK, geolocation, `fetch`), imports `app.js`, and then
 asserts every `getElementById` in it resolves against the real HTML.
 
-It runs as `pretest`, so `npm test` covers it, and from `.githooks/pre-push`.
+It runs as `pretest`, so `npm test` covers it, and from `.githooks/pre-push`,
+both together with `tools/install.test.mjs`.
 Enable the hook once per clone with `git config core.hooksPath .githooks`;
 `--no-verify` skips it.
 

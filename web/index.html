@@ -20,6 +20,7 @@
   </head>
   <body class="ui-signal ui-signal-v2 ui-signal-compact ui-signal-system ui-hex">
     <script src="appearance.js"></script>
+    <script src="install.js" defer></script>
     <header>
       <button id="auth-button" type="button" aria-label="Account">Sign in</button>
       <div id="header-context" hidden><i aria-hidden="true"></i><span></span></div>
@@ -152,6 +153,14 @@
         <p class="account-attribution">Data from <a href="https://mobilitylabs.emtmadrid.es">EMT MobilityLabs</a>.</p>
       </form>
     </dialog>
+
+    <!-- Shown by install.js when the browser says Hubward can be installed. -->
+    <div id="install-banner" role="dialog" aria-label="Install Hubward" hidden>
+      <img src="icon-192.png" alt="" />
+      <span><strong>Hubward app</strong><small>Home screen + alerts</small></span>
+      <button type="button" data-install>Install</button>
+      <button type="button" data-dismiss aria-label="Not now" title="Not now">✕</button>
+    </div>
 
     <button id="push-banner" type="button" hidden>
       <img src="icon-192.png" alt="" />

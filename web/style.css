@@ -1521,6 +1521,27 @@ button.place-stop-open { color: var(--fg); font-size: .72rem; font-weight: 700; 
   touch-action: none; /* the swipe is ours, not a page scroll */
   animation: push-banner-in 180ms ease-out;
 }
+/* The install offer: a quiet card just above the bottom menu (≈60px tall),
+   gone for 30 days after "Not now". */
+#install-banner {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 4.6rem); z-index: 1950;
+  transform: translateX(-50%);
+  width: min(28rem, calc(100vw - 2rem)); box-sizing: border-box;
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.55rem 0.55rem 0.8rem;
+  border: 1px solid var(--accent); border-radius: 12px;
+  background: var(--card, var(--bg)); color: var(--fg, inherit);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  animation: push-banner-in 180ms ease-out;
+}
+#install-banner[hidden] { display: none; }
+#install-banner img { width: 32px; height: 32px; border-radius: 8px; flex: none; }
+#install-banner span { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+#install-banner strong { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#install-banner small { color: var(--muted); font-size: 0.75rem; }
+#install-banner button { min-height: 40px; flex: none; }
+#install-banner [data-install] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; padding-inline: 1rem; }
+#install-banner [data-dismiss] { min-width: 40px; background: transparent; border-color: transparent; color: var(--muted); }
+
 #push-banner.settling { transition: transform 160ms ease-out, opacity 160ms ease-out; }
 #push-banner[hidden] { display: none; }
 #push-banner img { width: 32px; height: 32px; border-radius: 8px; flex: none; }
