@@ -2576,6 +2576,11 @@ function removeShownRoute(shown) {
   if (!shownRoutes.has(key)) return false;
   removeRouteLayers(shownRoutes.get(key));
   shownRoutes.delete(key);
+  // Every way of taking a route down comes through here, so the selection
+  // goes with its route here too. The ≈ control and a stop card's routes
+  // button used to leave it set: drawing the routes again brought the old
+  // highlight back, every other route faded.
+  if (selectedRouteKey === key) selectedRouteKey = null;
   return true;
 }
 
@@ -2620,7 +2625,6 @@ async function applyRoute(code, label, requestedDirection, anchorStopId,
     // to do". Either way the opposite direction is left exactly where it is.
     if (!toggle) return current;
     removeShownRoute(current);
-    if (selectedRouteKey === key) selectedRouteKey = null;
     renderRouteLegend();
     rebuildLiveBusMarkers();
     return null;
@@ -2984,7 +2988,6 @@ function renderRouteLegend() {
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
       removeShownRoute(shown);
-      if (selectedRouteKey === key) selectedRouteKey = null;
       renderRouteLegend();
       rebuildLiveBusMarkers();
       syncMapControls();

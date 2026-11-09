@@ -272,23 +272,32 @@ function routeFor(routes, code) {
 }
 
 function bestDirect(originLines, destinationLines, routes) {
-  const destinationByCode = new Map(destinationLines.map((item) => [lineIdentity(item), item]));
+  // Every stop of a line at the destination, not one. A Map keyed on the line
+  // alone kept whichever stop came last — at Hakuna the 29's platform for the
+  // other direction — and the direct ride went unfound while the right
+  // platform sat in the list.
+  const destinationsByCode = new Map();
+  for (const item of destinationLines) {
+    const code = lineIdentity(item);
+    if (!destinationsByCode.has(code)) destinationsByCode.set(code, []);
+    destinationsByCode.get(code).push(item);
+  }
   const candidates = [];
   for (const origin of originLines) {
-    const destination = destinationByCode.get(lineIdentity(origin));
-    if (!destination) continue;
-    const route = routeFor(routes, origin.code);
-    const sections = directedSections(route,
-      new Set([String(origin.stop.stopId)]), new Set([String(destination.stop.stopId)]));
-    for (const section of sections) {
-      candidates.push({
-        type: "direct",
-        score: walkMetres(origin.stop) + walkMetres(destination.stop) + (section.to - section.from) * 420,
-        originStop: origin.stop,
-        destinationStop: destination.stop,
-        firstLeg: { line: origin.code, label: origin.label, direction: section.direction,
-          stops: section.to - section.from },
-      });
+    for (const destination of destinationsByCode.get(lineIdentity(origin)) ?? []) {
+      const route = routeFor(routes, origin.code);
+      const sections = directedSections(route,
+        new Set([String(origin.stop.stopId)]), new Set([String(destination.stop.stopId)]));
+      for (const section of sections) {
+        candidates.push({
+          type: "direct",
+          score: walkMetres(origin.stop) + walkMetres(destination.stop) + (section.to - section.from) * 420,
+          originStop: origin.stop,
+          destinationStop: destination.stop,
+          firstLeg: { line: origin.code, label: origin.label, direction: section.direction,
+            stops: section.to - section.from },
+        });
+      }
     }
   }
   return candidates;
@@ -489,7 +498,9 @@ const plannerBudget = (tier) => PLANNER_BUDGETS[tier === "paid" ? "paid" : "free
 const WALKING_MATRIX_LIMIT = 25;
 // Below this the gate stops filtering and simply takes the nearest on foot.
 const JOURNEY_MIN_ACCESS_STOPS = 3;
-// Stops kept around each destination for the planner to alight at.
+// Stops kept around each destination for the planner to alight at: every
+// line's nearest first (see lineDiverse), then the nearest of the rest up to
+// this many.
 const DESTINATION_STOPS = 6;
 function plannerLocation(value, name) {
   const lat = Number(value?.lat);
@@ -625,6 +636,47 @@ function walkingReachable(candidates, radius) {
     : byWalk.slice(0, JOURNEY_MIN_ACCESS_STOPS);
 }
 
+/** Up to `max` of `stops` (already nearest first), choosing the nearest stop
+ * of **every line** before any second stop of a line already covered.
+ *
+ * The destination end used to keep the nearest few and nothing else. Around
+ * Hakuna on 2026-11-09 that was four platforms of 73/9 and two of the 1, so
+ * the 29's stop, seventh on foot, was cut and the direct ride from Añastro
+ * vanished; around AZCA 57 stops sit within 700m and the 7's was not among
+ * the 25 nearest, so it was never walked at all. Distance decides which stop
+ * a line is reached from; it must not decide whether the line is reachable.
+ * Lines in `preferred` (those that also stop near the rider, so the only
+ * ones that can make a direct ride) are covered first: when there are more
+ * lines than a hard limit such as the walking matrix's 25, it is the
+ * irrelevant ones that fall off the end. Order is kept, so callers still see
+ * nearest first. With more lines than `max`, every line still gets its stop:
+ * a line is worth more than the cap; a hard limit is the caller's to apply.
+ */
+export function lineDiverse(stops, max, preferred = new Set()) {
+  const covered = new Set();
+  const ranked = [];
+  // Per line *and direction*: a line's nearest stop is often the platform
+  // for the other way (the 29 at Hakuna), which no ride towards it uses.
+  const cover = (wanted) => {
+    for (const stop of stops) {
+      if (ranked.includes(stop)) continue;
+      const lines = (stop.lines ?? []).map((entry) => [lineIdentity(entry), entry?.direction ?? ""])
+        .filter(([line]) => line);
+      if (lines.some(([line, way]) => wanted(line) && !covered.has(`${line}:${way}`))) {
+        ranked.push(stop);
+        for (const [line, way] of lines) covered.add(`${line}:${way}`);
+      }
+    }
+  };
+  cover((line) => preferred.has(line));
+  cover(() => true);
+  for (const stop of stops) {
+    if (ranked.length >= max) break;
+    if (!ranked.includes(stop)) ranked.push(stop);
+  }
+  return ranked;
+}
+
 /** Route the walk between `place` and each stop, in one matrix call, and
  *  stamp `walkMetres`/`walkSeconds` on the stops the router answered for.
  *  Walking is treated as symmetric, so the same call serves the walk *to* a
@@ -709,16 +761,22 @@ export async function plan(body, { sources, tier, now = new Date() }) {
   // origin's. A Hub does not move, and the matrix is edge-cached for a week
   // on its coordinates, so for saved Hubs that call is nearly always a hit.
   const routable = originCandidates.slice(0, WALKING_MATRIX_LIMIT);
+  const originLines = new Set(originCandidates.flatMap((stop) =>
+    (stop.lines ?? []).map(lineIdentity).filter(Boolean)));
   const [walkingRouted, destinationAccess] = await Promise.all([
     routeWalks(sources, origin, routable),
     Promise.all(destinations.map(async (destination) => {
-      const candidates = nearbyAccess(
+      // Walk every line's nearest stop (the rider's own lines first), then
+      // the nearest of the rest; the matrix's 25 is the hard limit.
+      const candidates = lineDiverse(nearbyAccess(
         await sources.nearby(destination.lat, destination.lon, destination.radius),
-        destination, WALKING_MATRIX_LIMIT);
+        destination, Infinity), WALKING_MATRIX_LIMIT, originLines).slice(0, WALKING_MATRIX_LIMIT);
       const routed = await routeWalks(sources, destination, candidates);
+      const reachable = walkingReachable(candidates, destination.radius);
       return {
         routed,
-        stops: walkingReachable(candidates, destination.radius).slice(0, DESTINATION_STOPS),
+        stops: lineDiverse(reachable, DESTINATION_STOPS, originLines)
+          .sort((a, b) => reachable.indexOf(a) - reachable.indexOf(b)),
       };
     })),
   ]);
