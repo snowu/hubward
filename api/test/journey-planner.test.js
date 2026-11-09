@@ -6,6 +6,7 @@ import {
   linesMatch,
   nearbyAccess,
   compareJourneyOptions,
+  incidentDisrupts,
   plan,
   planJourney,
   prioritizeAccessStops,
@@ -77,6 +78,40 @@ describe("journey planner", () => {
     const transfer = { type: "one_transfer", incidents: [], rankSeconds: 5 * 60, score: 10 };
     expect([transfer, disrupted, clean].sort(compareJourneyOptions))
       .toEqual([clean, disrupted, transfer]);
+  });
+
+  it("demotes a ride for a disruption, not for a timetable notice", () => {
+    const notice = { title: "Cambio de Horarios. Afectada línea 40 de EMT.", effect: "OTHER_EFFECT" };
+    const fast = { type: "one_transfer", incidents: [notice], rankSeconds: 29 * 60, score: 1 };
+    const slow = { type: "one_transfer", incidents: [], rankSeconds: 38 * 60, score: 1 };
+    expect([slow, fast].sort(compareJourneyOptions)).toEqual([fast, slow]);
+    const detour = { ...fast, incidents: [{ title: "Desvío por obras", effect: "DETOUR" }] };
+    expect([detour, slow].sort(compareJourneyOptions)).toEqual([slow, detour]);
+  });
+
+  it("tells disruptions from notices by effect first, then by title, and assumes the worst", () => {
+    expect(incidentDisrupts({ effect: "DETOUR", title: "Cambio de horarios" })).toBe(true);
+    expect(incidentDisrupts({ effect: "ADDITIONAL_SERVICE", title: "Refuerzo" })).toBe(false);
+    expect(incidentDisrupts({ effect: "MODIFIED_SERVICE", title: "Corte de calle Alcalá" })).toBe(true);
+    expect(incidentDisrupts({ effect: "MODIFIED_SERVICE", title: "Cambio de Horarios. Afectada línea 40" })).toBe(false);
+    expect(incidentDisrupts({ title: "Huelga parcial" })).toBe(true);
+    expect(incidentDisrupts({ title: "Afectada línea 27" })).toBe(true);
+    expect(incidentDisrupts({})).toBe(true);
+  });
+
+  it("counts a bus due a few seconds before the rider reaches the stop as caught", () => {
+    // Añastro, 2026-11-09: the 7 due in 367s, the walk 381s. Missing it by a
+    // predicted 14 seconds meant planning around the next one, 25 minutes on.
+    const option = (arrivals) => ({
+      type: "direct", originStop: { walkSeconds: 381 }, destinationStop: { distanceM: 0 },
+      firstLeg: { arrivals, stops: 0 },
+    });
+    const close = option([367, 1526]);
+    estimateJourneySeconds(close);
+    expect(close.firstLeg.selectedArrival).toBe(367);
+    const gone = option([300, 1526]);
+    estimateJourneySeconds(gone);
+    expect(gone.firstLeg.selectedArrival).toBe(1526);
   });
 
   it("weights walking above riding when ranking, without touching the shown ETA", () => {
@@ -561,6 +596,42 @@ describe("plan: every line at the destination gets a stop", () => {
     });
     const options = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_NOON, "paid"));
     expect(options.map((o) => o.firstLeg.line)).toEqual(["7"]);
+  });
+});
+
+describe("plan: lines whose code is not their label", () => {
+  // Work, 2026-11-09: 70 → S10 at Plaza Castilla was found, its board read
+  // (S10 due in 103s and 343s), and then dropped — the leg carried EMT's code
+  // "881", the board said "S10", and they were compared as strings.
+  const coded = (s, code, label) => ({ ...s, lines: [{ line: code, label }] });
+  const plaza = () => world({
+    stops: [
+      busStop("O", 100, 0, ["70"]),
+      busStop("X", 2000, 0, ["70"]), coded(busStop("Y", 2000, 50), "881", "S10"),
+      coded(busStop("D", 4000, 50), "881", "S10"),
+    ],
+    routes: {
+      70: route("70", [busStop("O", 100, 0), busStop("X", 2000, 0)]),
+      881: route("881", [busStop("Y", 2000, 50), busStop("D", 4000, 50)]),
+    },
+    boards: { O: board("O", "70", 120), Y: board("Y", "S10", 900) },
+  });
+
+  it("keeps a transfer onto a line the board names by label", async () => {
+    const options = optionsOf(await planFor(plaza(), [hub(4000, 50)], SUMMER_NOON));
+    expect(options.map((o) => [o.firstLeg.label, o.secondLeg?.label])).toEqual([["70", "S10"]]);
+    expect(options[0].secondLeg.arrivals).toEqual([900]);
+  });
+
+  it("matches a night line's board by label on the first leg too", async () => {
+    const w = world({
+      stops: [coded(busStop("O", 100, 0), "502", "N2"), coded(busStop("D", 3000, 0), "502", "N2")],
+      routes: { 502: route("502", [busStop("O", 100, 0), busStop("D", 3000, 0)]) },
+      boards: { O: board("O", "N2", 400) },
+    });
+    const [option] = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_1AM));
+    expect(option.firstLeg.arrivals).toEqual([400]);
+    expect(option.estimatedSeconds).not.toBeNull();
   });
 });
 

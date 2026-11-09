@@ -941,6 +941,9 @@ const WALK_METRES_PER_SECOND = 1.3;
 const DEFAULT_HEADWAY_SECONDS = 10 * 60;
 const MIN_HEADWAY_SECONDS = 3 * 60;
 const MAX_HEADWAY_SECONDS = 30 * 60;
+// The planner's CATCH_SLACK_SECONDS: a bus due this much before you would
+// reach the stop still counts as catchable. Change both.
+const CATCH_SLACK_SECONDS = 60;
 
 /** A hub card's first leg, timed from the boarding stop's board in the shared
  *  store, so the card and the stop sheet it opens never disagree. The pick is
@@ -964,7 +967,7 @@ function firstLegTimes(option) {
     .map((bus) => Number(bus.seconds)).filter(Number.isFinite).sort((a, b) => a - b);
   const walk = Number(option.originStop.walkSeconds
     ?? (option.originStop.distanceM ?? 0) / WALK_METRES_PER_SECOND);
-  let wait = times.find((seconds) => seconds >= walk) ?? null;
+  let wait = times.find((seconds) => seconds >= walk - CATCH_SLACK_SECONDS) ?? null;
   if (wait == null && times.length) {
     const observed = times.length > 1 ? times.at(-1) - times.at(-2) : DEFAULT_HEADWAY_SECONDS;
     const headway = Math.min(MAX_HEADWAY_SECONDS,
@@ -1023,9 +1026,12 @@ function placeRouteRow(option, card, { primary = false } = {}) {
     detail.append(later);
   }
   if (option.incidents?.length) {
+    // The worker marks each incident; one without the mark (an older
+    // worker) is taken as disrupting, which is what every incident used to be.
+    const disrupted = option.incidents.some((incident) => incident.disrupts !== false);
     const warning = document.createElement("span");
-    warning.className = "route-incident";
-    warning.textContent = " · ⚠ Detour";
+    warning.className = disrupted ? "route-incident" : "route-incident is-notice";
+    warning.textContent = disrupted ? " · ⚠ Detour" : " · ⓘ Notice";
     warning.title = option.incidents.map((incident) => incident.title).filter(Boolean).join("\n");
     detail.append(warning);
   }

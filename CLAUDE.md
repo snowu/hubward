@@ -139,7 +139,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 243 tests, no network
+npm test          # web smoke check, then vitest under workerd; 248 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -468,7 +468,10 @@ and carries what the page actually needs:
 differ (005→5, 070→70, 523→N23, 833→SE833) and arrivals report the *label*.
 Area search sends the same pair per line but no hours. A bare code cannot be
 turned into a label by trimming zeros; if you only have the code, show it.
-`lineEntry()` in `emt.js` normalises both shapes — detail objects and area
+In the worker, `linesMatch()` in the Planner compares lines by code
+*or* label: route legs carry the code, boards the label, and comparing codes
+alone silently dropped every transfer onto S10 (881) and every night-line leg
+until 2026-11-09. `lineEntry()` in `emt.js` normalises both shapes — detail objects and area
 search's bare codes — into one record, and `normaliseLine()` in `app.js`
 additionally tolerates the string-only shape older devices cached.
 
@@ -836,7 +839,18 @@ is most stale), and manually per-card or all at once.
    leg is 15–20 minutes, and at night the wider search radius is what buys the
    choice instead. `compareJourneyOptions()` is that order — transfers last,
    then incidents, then time — and it is a *preference*, not a measurement, so
-   it lives beside the estimator rather than inside it.
+   it lives beside the estimator rather than inside it. Only an incident that
+   changes the ride counts (`incidentDisrupts()`: EMT's GTFS effect first —
+   DETOUR, NO_SERVICE… — then the title, desvío/corte/huelga against
+   horarios/refuerzo; unclear counts). A "Cambio de Horarios" notice sank
+   Work's fastest option and was labelled a detour on the card; the card now
+   says "ⓘ Notice" for those.
+
+   **A bus due up to `CATCH_SLACK_SECONDS` (60s) before the rider would reach
+   the stop still counts as caught**, in `nextDeparture()` and its page copy
+   `firstLegTimes()`. EMT's estimate moves that much between polls and the
+   walk is timed at 1.3 m/s; missing a bus by a predicted 14s and planning
+   around the next one 25 minutes later was false precision.
 
    Ranking uses `rankJourneySeconds()`, not the predicted arrival: walking is
    weighted `WALK_AVERSION` (1.6×) above riding, because ranking on raw

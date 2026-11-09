@@ -7,6 +7,13 @@ const DEFAULT_HEADWAY_SECONDS = 10 * 60;
 const MIN_HEADWAY_SECONDS = 3 * 60;
 const MAX_HEADWAY_SECONDS = 30 * 60;
 const TRANSFER_BUFFER_SECONDS = 60;
+/** A bus due this much before the rider would reach the stop still counts as
+ *  catchable. EMT's estimate moves by about this much between polls, and the
+ *  walk is timed at an unhurried 1.3 m/s: missing a 7 by a predicted 14
+ *  seconds and planning around the next one 25 minutes later was the planner
+ *  being more precise than its inputs. web/app.js firstLegTimes() keeps a
+ *  copy: change both. */
+export const CATCH_SLACK_SECONDS = 60;
 
 export function distanceMetres(a, b) {
   const rad = Math.PI / 180;
@@ -41,16 +48,29 @@ function lineIdentity(entry) {
   return /^\d+$/.test(code) ? code.replace(/^0+(?=\d)/, "") : code;
 }
 
+/** Every name a line goes by: its EMT code and the label it is signed with.
+ *  They differ for night and special lines (502 is N2, 881 is S10), and a
+ *  board names a bus by label while a route leg carries the code. */
+function lineIdentities(entry) {
+  return [entry?.line, entry?.label]
+    .filter((value) => value != null && String(value).trim())
+    .map((value) => lineIdentity({ line: value }));
+}
+
+/** Same line, whichever of code or label each side carries. Comparing codes
+ *  alone dropped 70 → S10 at Plaza Castilla: the leg said "881", the board
+ *  "S10", and the transfer was thrown away as having no bus. The page's
+ *  firstLegTimes() has always matched on both. */
 export function linesMatch(a, b) {
-  const left = lineIdentity(a);
-  return Boolean(left) && left === lineIdentity(b);
+  const left = new Set(lineIdentities(a));
+  return lineIdentities(b).some((identity) => left.has(identity));
 }
 
 /** The first bus at or after `readyAt`, else one headway past the last one
  *  listed. web/app.js firstLegTimes() keeps a copy for hub cards: change both. */
 function nextDeparture(arrivals, readyAt) {
   const times = (arrivals ?? []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-  const live = times.find((seconds) => seconds >= readyAt);
+  const live = times.find((seconds) => seconds >= readyAt - CATCH_SLACK_SECONDS);
   if (live != null) return live;
   if (times.length === 0) return null;
   const observed = times.length > 1 ? times.at(-1) - times.at(-2) : DEFAULT_HEADWAY_SECONDS;
@@ -110,7 +130,7 @@ export function rankJourneySeconds(option) {
  */
 export function compareJourneyOptions(a, b) {
   const transfer = (option) => Number(option.type !== "direct");
-  const disrupted = (option) => Number((option.incidents?.length ?? 0) > 0);
+  const disrupted = (option) => Number((option.incidents ?? []).some(incidentDisrupts));
   const untimed = (option) => Number(option.rankSeconds == null);
   return transfer(a) - transfer(b)
     || disrupted(a) - disrupted(b)
@@ -118,6 +138,32 @@ export function compareJourneyOptions(a, b) {
     || (a.rankSeconds ?? Number.POSITIVE_INFINITY)
       - (b.rankSeconds ?? Number.POSITIVE_INFINITY)
     || a.score - b.score;
+}
+
+/** GTFS effects EMT stamps on an incident that change the ride itself, and
+ *  those that never do. Everything else (MODIFIED_SERVICE, OTHER_EFFECT,
+ *  UNKNOWN_EFFECT, none at all) is decided by the title. */
+const DISRUPTING_EFFECTS = new Set(["NO_SERVICE", "REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR", "STOP_MOVED"]);
+const HARMLESS_EFFECTS = new Set(["NO_EFFECT", "ADDITIONAL_SERVICE", "ACCESSIBILITY_ISSUE"]);
+const DISRUPTING_WORDS = /desv[ií]o|desviad|cort[ea]|cortad|huelga|suspen|interrup|obras|cierre|cerrad|retras|sin servicio|no (presta|realiza)|parada provisional|traslad/i;
+const NOTICE_WORDS = /horario|ampliaci[oó]n|refuerzo|informaci[oó]n|nueva l[ií]nea|tarifa/i;
+
+/** Whether an incident changes the ride, rather than just being news.
+ *
+ * Every published incident used to count as a disruption. "Cambio de
+ * Horarios. Afectada línea 40" — a timetable change — sank Work's fastest
+ * option (7 → 40) below three slower ones on 2026-11-09, and the card called
+ * it a detour. An incident nobody can classify still counts, as before:
+ * wrongly demoting a ride costs less than recommending a diverted one.
+ */
+export function incidentDisrupts(incident) {
+  const effect = String(incident?.effect ?? "").toUpperCase();
+  if (DISRUPTING_EFFECTS.has(effect)) return true;
+  if (HARMLESS_EFFECTS.has(effect)) return false;
+  const title = String(incident?.title ?? "");
+  if (DISRUPTING_WORDS.test(title)) return true;
+  if (NOTICE_WORDS.test(title)) return false;
+  return true;
 }
 
 /** Collapse candidates that represent the same journey as experienced by the user.
@@ -875,6 +921,8 @@ export async function plan(body, { sources, tier, now = new Date() }) {
         ...(incidentsByLine.get(option.firstLeg?.line) ?? []),
         ...(incidentsByLine.get(option.secondLeg?.line) ?? []),
       ].map((incident) => [incident.id, incident])).values()];
+      // Said outright, so the page labels a notice as a notice.
+      for (const incident of option.incidents) incident.disrupts = incidentDisrupts(incident);
       option.estimatedSeconds = estimateJourneySeconds(option);
       option.rankSeconds = rankJourneySeconds(option);
     }
