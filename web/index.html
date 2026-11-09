@@ -198,10 +198,11 @@
       </form>
     </dialog>
 
-    <dialog id="tracking-edit-dialog" aria-labelledby="tracking-edit-title">
+    <dialog id="tracking-edit-dialog" aria-labelledby="tracking-edit-title" tabindex="-1">
       <form id="tracking-edit-form" method="dialog">
         <h2 id="tracking-edit-title">Alert</h2>
         <p id="tracking-edit-target" class="muted"></p>
+        <small id="tracking-edit-intro" class="muted">When this alert may notify you.</small>
         <div class="field"><span>Only when I am within</span>
           <div id="tracking-edit-radius" class="segmented tracking-choice" role="group" aria-label="Radius">
             <button type="button" data-radius="">Any</button>
@@ -221,12 +222,16 @@
             <button type="button" data-day="6" aria-pressed="false">Sa</button>
             <button type="button" data-day="0" aria-pressed="false">Su</button>
           </div>
-          <small class="muted">No days picked: any time.</small>
+          <small id="tracking-edit-days-hint" class="muted">No days picked: any time.</small>
         </div>
         <div id="tracking-edit-hours" class="tracking-hours">
           <label class="field"><span>From</span><input id="tracking-edit-from" type="time" required /></label>
           <label class="field"><span>To</span><input id="tracking-edit-to" type="time" required /></label>
         </div>
+        <label id="tracking-edit-lead-field" class="field"><span>Minutes I need to reach the stop</span>
+          <input id="tracking-edit-lead" type="number" min="1" max="30" step="1" inputmode="numeric" placeholder="Off" />
+          <small class="muted">Buzz when the bus is this far out. Empty: 15 min.</small>
+        </label>
         <p id="tracking-edit-error" role="alert" hidden></p>
         <div class="dialog-actions">
           <button id="tracking-edit-cancel" type="button">Cancel</button>
