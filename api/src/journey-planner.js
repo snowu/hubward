@@ -22,6 +22,16 @@ function point(stop) {
   return { lat: Number(stop.coordinates?.[1]), lon: Number(stop.coordinates?.[0]) };
 }
 
+/** Metres and seconds on foot to or from a stop: routed when the pedestrian
+ *  matrix answered for it, the straight line otherwise. */
+function walkMetres(stop) {
+  return Number.isFinite(stop?.walkMetres) ? stop.walkMetres : Number(stop?.distanceM ?? 0);
+}
+function walkSeconds(stop) {
+  return Number.isFinite(stop?.walkSeconds) ? stop.walkSeconds
+    : Number(stop?.distanceM ?? 0) / WALK_METRES_PER_SECOND;
+}
+
 function lineCode(entry) {
   return String(entry?.line ?? entry?.label ?? "").trim();
 }
@@ -50,14 +60,12 @@ function nextDeparture(arrivals, readyAt) {
 
 /** Estimate seconds from the user's current position to the Hub. */
 export function estimateJourneySeconds(option) {
-  const originWalk = Number.isFinite(option.originStop?.walkSeconds)
-    ? option.originStop.walkSeconds
-    : Number(option.originStop?.distanceM ?? 0) / WALK_METRES_PER_SECOND;
+  const originWalk = walkSeconds(option.originStop);
   const firstDeparture = nextDeparture(option.firstLeg?.arrivals, originWalk);
   if (firstDeparture == null) return null;
   option.firstLeg.selectedArrival = Math.round(firstDeparture);
   const firstRide = Number(option.firstLeg?.stops ?? 0) * RIDE_SECONDS_PER_STOP;
-  const destinationWalk = Number(option.destinationStop?.distanceM ?? 0) / WALK_METRES_PER_SECOND;
+  const destinationWalk = walkSeconds(option.destinationStop);
   if (option.type === "direct") return Math.round(firstDeparture + firstRide + destinationWalk);
 
   const transferWalk = Number(option.transfer?.walkM ?? 0) / WALK_METRES_PER_SECOND;
@@ -82,11 +90,8 @@ const WALK_AVERSION = 1.6;
 
 export function rankJourneySeconds(option) {
   if (option?.estimatedSeconds == null) return null;
-  const originWalk = Number.isFinite(option.originStop?.walkSeconds)
-    ? option.originStop.walkSeconds
-    : Number(option.originStop?.distanceM ?? 0) / WALK_METRES_PER_SECOND;
-  const onFoot = originWalk
-    + Number(option.destinationStop?.distanceM ?? 0) / WALK_METRES_PER_SECOND
+  const onFoot = walkSeconds(option.originStop)
+    + walkSeconds(option.destinationStop)
     + Number(option.transfer?.walkM ?? 0) / WALK_METRES_PER_SECOND;
   return Math.round(option.estimatedSeconds + onFoot * (WALK_AVERSION - 1));
 }
@@ -278,7 +283,7 @@ function bestDirect(originLines, destinationLines, routes) {
     for (const section of sections) {
       candidates.push({
         type: "direct",
-        score: origin.stop.distanceM + destination.stop.distanceM + (section.to - section.from) * 420,
+        score: walkMetres(origin.stop) + walkMetres(destination.stop) + (section.to - section.from) * 420,
         originStop: origin.stop,
         destinationStop: destination.stop,
         firstLeg: { line: origin.code, label: origin.label, direction: section.direction,
@@ -316,7 +321,7 @@ function bestTransfers(originLines, destinationLines, routes, thresholdM) {
           if (!best) continue;
           candidates.push({
             type: "one_transfer",
-            score: first.stop.distanceM + second.stop.distanceM + best.walk +
+            score: walkMetres(first.stop) + walkMetres(second.stop) + best.walk +
               (best.i - start + end - best.j) * 420 + 600,
             originStop: first.stop,
             destinationStop: second.stop,
@@ -483,7 +488,9 @@ const plannerBudget = (tier) => PLANNER_BUDGETS[tier === "paid" ? "paid" : "free
 // The pedestrian matrix takes at most 25 destinations in one call.
 const WALKING_MATRIX_LIMIT = 25;
 // Below this the gate stops filtering and simply takes the nearest on foot.
-const JOURNEY_MIN_ORIGIN_STOPS = 3;
+const JOURNEY_MIN_ACCESS_STOPS = 3;
+// Stops kept around each destination for the planner to alight at.
+const DESTINATION_STOPS = 6;
 function plannerLocation(value, name) {
   const lat = Number(value?.lat);
   const lon = Number(value?.lon);
@@ -600,7 +607,9 @@ function routeBudget(budget, night) {
   return budget.routes[night ? "night" : "day"];
 }
 
-/** Candidates the radius actually reaches, measured the way they are walked.
+/** Candidates the radius actually reaches, measured the way they are walked:
+ * the boarding stops around the rider and the alighting stops around each
+ * destination alike.
  *
  * Never down to nothing: in a sparse corner every stop can route past the
  * gate, and an honest long walk is a better answer than "No route". Stops the
@@ -612,8 +621,38 @@ function walkingReachable(candidates, radius) {
     (a.walkMetres ?? a.distanceM) - (b.walkMetres ?? b.distanceM));
   const within = byWalk.filter((stop) =>
     !Number.isFinite(stop.walkMetres) || stop.walkMetres <= radius);
-  return within.length >= JOURNEY_MIN_ORIGIN_STOPS ? within
-    : byWalk.slice(0, JOURNEY_MIN_ORIGIN_STOPS);
+  return within.length >= JOURNEY_MIN_ACCESS_STOPS ? within
+    : byWalk.slice(0, JOURNEY_MIN_ACCESS_STOPS);
+}
+
+/** Route the walk between `place` and each stop, in one matrix call, and
+ *  stamp `walkMetres`/`walkSeconds` on the stops the router answered for.
+ *  Walking is treated as symmetric, so the same call serves the walk *to* a
+ *  boarding stop and the walk *from* an alighting one. Returns whether any
+ *  stop was routed; a router that is down routes none. */
+async function routeWalks(sources, place, stops) {
+  if (!stops.length) return false;
+  let routed = false;
+  try {
+    const matrix = await sources.walking({
+      origin: { lat: place.lat, lon: place.lon },
+      destinations: stops.map((stop) => ({
+        lat: stop.coordinates?.[1], lon: stop.coordinates?.[0],
+      })),
+    });
+    for (const [index, stop] of stops.entries()) {
+      const route = matrix.routes[index];
+      if (!Number.isFinite(route?.metres) || !Number.isFinite(route?.seconds)) continue;
+      stop.walkMetres = route.metres;
+      stop.walkSeconds = route.seconds;
+      routed = true;
+    }
+  } catch {
+    // Journey planning remains available if the public pedestrian router is
+    // temporarily down. Without routed timing the UI deliberately stays
+    // neutral, and the gates fall back to the straight-line radius.
+  }
+  return routed;
 }
 
 /** Plan a way from `origin` to each Hub in `destinations`.
@@ -651,9 +690,6 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     : Promise.resolve(null);
   const originRaw = await sources.nearby(origin.lat, origin.lon, accessRadius(night));
   const originCandidates = nearbyAccess(originRaw, origin, 50);
-  const destinationStops = await Promise.all(destinations.map(async (destination) =>
-    nearbyAccess(await sources.nearby(destination.lat, destination.lon, destination.radius),
-      destination, 6)));
 
   // Walk the candidates *before* choosing among them, not after.
   //
@@ -664,27 +700,29 @@ export async function plan(body, { sources, tier, now = new Date() }) {
   // costs the same single matrix call it always did, and lets the stops that
   // are genuinely out of range lose their slot instead of taking one and
   // then being thrown away.
+  //
+  // The same holds at the other end. A hub behind a motorway or a railway has
+  // stops that are near on the map and far on foot, and keeping the six
+  // nearest as the crow flies can cut the one stop actually on the hub's side
+  // in favour of six across the tracks. So each destination's candidates are
+  // routed too, one matrix call per destination, all at once alongside the
+  // origin's. A Hub does not move, and the matrix is edge-cached for a week
+  // on its coordinates, so for saved Hubs that call is nearly always a hit.
   const routable = originCandidates.slice(0, WALKING_MATRIX_LIMIT);
-  let walkingRouted = false;
-  try {
-    const matrix = await sources.walking({
-      origin,
-      destinations: routable.map((stop) => ({
-        lat: stop.coordinates?.[1], lon: stop.coordinates?.[0],
-      })),
-    });
-    for (const [index, stop] of routable.entries()) {
-      const route = matrix.routes[index];
-      if (!Number.isFinite(route?.metres) || !Number.isFinite(route?.seconds)) continue;
-      stop.walkMetres = route.metres;
-      stop.walkSeconds = route.seconds;
-      walkingRouted = true;
-    }
-  } catch {
-    // Journey planning remains available if the public pedestrian router is
-    // temporarily down. Without routed timing the UI deliberately stays
-    // neutral, and the gate below falls back to the straight-line radius.
-  }
+  const [walkingRouted, destinationAccess] = await Promise.all([
+    routeWalks(sources, origin, routable),
+    Promise.all(destinations.map(async (destination) => {
+      const candidates = nearbyAccess(
+        await sources.nearby(destination.lat, destination.lon, destination.radius),
+        destination, WALKING_MATRIX_LIMIT);
+      const routed = await routeWalks(sources, destination, candidates);
+      return {
+        routed,
+        stops: walkingReachable(candidates, destination.radius).slice(0, DESTINATION_STOPS),
+      };
+    })),
+  ]);
+  const destinationStops = destinationAccess.map((access) => access.stops);
   const originStops = prioritizeAccessStops(
     walkingReachable(walkingRouted ? routable : originCandidates, accessRadius(night)),
     destinationStops,
@@ -814,7 +852,7 @@ export async function plan(body, { sources, tier, now = new Date() }) {
     timings: { busesMs, bikeWaitMs: Date.now() - startedAt - busesMs },
     calls: {
       nearby: 1 + destinations.length,
-      walking: walkingRouted ? 1 : 0,
+      walking: Number(walkingRouted) + destinationAccess.filter((access) => access.routed).length,
       routes: routeCodes.length,
       arrivals: liveStopIds.length + transferStopIds.length,
       incidents: incidentCodes.length,
