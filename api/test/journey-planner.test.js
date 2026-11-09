@@ -505,6 +505,65 @@ describe("plan: walking from the last stop", () => {
   });
 });
 
+describe("plan: every line at the destination gets a stop", () => {
+  // Hakuna, 2026-11-09: four platforms of 73/9 and two of the 1 were the six
+  // nearest on foot, so the 29's stop, seventh, was cut and its direct ride
+  // from Añastro vanished.
+  it("keeps a line's only stop even when other lines' platforms are nearer", async () => {
+    const crowd = ["p1", "p2", "p3", "p4", "p5", "p6"].map((id, i) =>
+      busStop(id, 3000 + i * 10, 60 + i * 20, ["X"]));
+    const w = world({
+      stops: [busStop("o29", 100, 0, ["29"]), ...crowd, busStop("d29", 3000, -260, ["29"])],
+      routes: { 29: route("29", [busStop("o29", 100, 0), busStop("d29", 3000, -260)]) },
+      boards: { o29: board("o29", "29", 300) },
+    });
+    const options = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_NOON));
+    expect(options.map((o) => [o.firstLeg.line, o.destinationStop.stopId])).toEqual([["29", "d29"]]);
+  });
+
+  it("keeps the line's stop for the direction that arrives, not just its nearest platform", async () => {
+    const way = (s, direction) => ({ ...s, lines: s.lines.map((l) => ({ ...l, direction })) });
+    const crowd = ["p1", "p2", "p3", "p4", "p5", "p6"].map((id, i) =>
+      busStop(id, 3000 + i * 10, 60 + i * 20, ["X"]));
+    const w = world({
+      stops: [busStop("o29", 100, 0, ["29"]), ...crowd,
+        way(busStop("back", 3000, -100, ["29"]), "B"), way(busStop("there", 3000, -300, ["29"]), "A")],
+      routes: { 29: route("29", [busStop("o29", 100, 0), busStop("there", 3000, -300)], [busStop("back", 3000, -100)]) },
+      boards: { o29: board("o29", "29", 300) },
+    });
+    const options = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_NOON));
+    expect(options.map((o) => [o.type, o.destinationStop.stopId])).toEqual([["direct", "there"]]);
+  });
+
+  it("finds the direct ride whichever of a line's stops is listed last", async () => {
+    // bestDirect() kept one destination stop per line, the last: here the
+    // platform for the other direction, so the ride was never found.
+    const way = (s, direction) => ({ ...s, lines: s.lines.map((l) => ({ ...l, direction })) });
+    const w = world({
+      stops: [busStop("o29", 100, 0, ["29"]),
+        way(busStop("there", 3000, -100, ["29"]), "A"), way(busStop("back", 3000, -300, ["29"]), "B")],
+      routes: { 29: route("29", [busStop("o29", 100, 0), busStop("there", 3000, -100)], [busStop("back", 3000, -300)]) },
+      boards: { o29: board("o29", "29", 300) },
+    });
+    const options = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_NOON));
+    expect(options.map((o) => [o.type, o.destinationStop.stopId])).toEqual([["direct", "there"]]);
+  });
+
+  // Work, 2026-11-09: 57 stops within 700m of AZCA, and the 7's was not
+  // among the 25 nearest, so it was never even walked.
+  it("walks a line's only stop even when 25 others are nearer", async () => {
+    const crowd = Array.from({ length: 30 }, (_, i) =>
+      busStop(`c${i}`, 3000 + (i % 6) * 40, 40 + Math.floor(i / 6) * 40, [`L${i}`]));
+    const w = world({
+      stops: [busStop("o7", 100, 0, ["7"]), ...crowd, busStop("d7", 3000, -500, ["7"])],
+      routes: { 7: route("7", [busStop("o7", 100, 0), busStop("d7", 3000, -500)]) },
+      boards: { o7: board("o7", "7", 300) },
+    });
+    const options = optionsOf(await planFor(w, [hub(3000, 0)], SUMMER_NOON, "paid"));
+    expect(options.map((o) => o.firstLeg.line)).toEqual(["7"]);
+  });
+});
+
 describe("plan: a failing read costs only its own options", () => {
   // Two direct lines from two different stops: C from O1, E from O2.
   const twoLines = (failing) => world({

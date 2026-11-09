@@ -139,7 +139,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 239 tests, no network
+npm test          # web smoke check, then vitest under workerd; 243 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -816,9 +816,13 @@ is most stale), and manually per-card or all at once.
    **The destination end is gated the same way.** Each destination's 25
    nearest stops go through their own matrix call (from the hub, walking
    taken as symmetric), `walkingReachable()` applies the hub's radius on
-   foot, and the 6 nearest *walked* are kept — so a hub behind a motorway or
-   railway no longer keeps six stops across the tracks and cuts the one on
-   its own side. That is one extra call per destination, run alongside the
+   foot, and the stops kept are `lineDiverse()`: the nearest stop of every
+   line *and direction* first, then the nearest of the rest up to 6 — so a hub
+   behind a motorway or railway no longer keeps six stops across the tracks
+   and cuts the one on its own side, and four platforms of one line can no
+   longer crowd out another line's only stop (the 29 at Hakuna, 2026-11-09).
+   The same rule picks the 25 stops worth walking, lines that also stop near
+   the rider first, because around AZCA 57 stops sit within 700m. That is one extra call per destination, run alongside the
    origin's; hubs do not move and the matrix is edge-cached for 7 days on
    its coordinates, so for saved hubs it is nearly always a hit. The walked
    distance at both ends feeds `planJourney`'s score, the shown estimate and
