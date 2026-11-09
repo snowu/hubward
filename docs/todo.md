@@ -1,19 +1,12 @@
 # To do
 
-Ideas parked for later. Each needs its own plan before any code.
+The backlog lives in GitHub issues:
+https://github.com/snowu/hubward/issues
 
-## "Leave now" alerts
+The two ideas parked here were moved there and still need their own plan
+before any code:
 
-A bus alert that accounts for the walk to the stop: pick a stop, a line and
-where you start from, and get "Leave now: the 70 arrives in 9 min, 7 min walk"
-when the next bus minus the walking time gets down to about two minutes.
-
-Most of the plumbing exists: the shared `StopPoller` boards, the per-user
-`TrackingRunner` rules and push, and the planner's walking times. What it
-needs is the rule, a small setup UI, and finer timing than the 2-minute board
-while a "leave now" window is open.
-
-## Bike dock analysis
-
-Parked: too big to start without a proper plan, and its use beyond curiosity
-is not established yet. Decide what question it answers first.
+- [#47](https://github.com/snowu/hubward/issues/47) "Leave now" alerts that
+  account for the walk to the stop
+- [#49](https://github.com/snowu/hubward/issues/49) Bike dock analysis: decide
+  what question it answers
