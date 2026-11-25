@@ -253,6 +253,8 @@ describe("getStopDetail", () => {
       to: "23:30",
       dayType: "FE",
       headers: ["SOL/SEVILLA", "CHAMARTIN"],
+      // minFreq/maxFreq: minutes between buses, the only schedule EMT has.
+      headway: { min: 18, max: 33 },
       direction: "A",
     });
     expect(detail.lines.map((l) => l.label)).toEqual(["5", "66", "70"]);

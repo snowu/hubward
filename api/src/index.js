@@ -44,6 +44,7 @@ import { getBikeTripDiagnostics, monitorBikeTrips } from "./trip-monitor.js";
 import { queryMetrics, recordEdgeMetric } from "./metrics.js";
 import { plan, withinDeadline } from "./journey-planner.js";
 import { loading, sharedLoad } from "./shared-load.js";
+import { scheduleFromDetail, scheduleFromTimetables } from "./schedule.js";
 
 // Must match the daily trigger in wrangler.toml.
 const KEEPALIVE_CRON = "17 4 * * *";
@@ -60,7 +61,7 @@ const ARRIVALS_CACHE_TTL = 4;
 const PLANNER_ARRIVALS_CACHE_TTL = 30;
 // Bump when a cached payload's *shape* changes: old entries would otherwise
 // keep serving the old shape until their TTL runs out (a week, for detail).
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 // Stop names/locations never move. A week of cache is quota-free.
 const DETAIL_CACHE_TTL = 7 * 24 * 3600;
 // Nearby searches are keyed on a ~110m grid so panning the map reuses cells.
@@ -187,6 +188,42 @@ async function cachedTimetable(requestUrl, emt, line, ctx) {
 async function cachedRoute(requestUrl, emt, line, ctx) {
   return edgeCachedJson(requestUrl, `route/${encodeURIComponent(line)}`, ROUTE_CACHE_TTL,
     () => getLineRoute(emt, line), ctx, emt, "route");
+}
+
+/** GET /stops/:stopId/schedule — what EMT promises at a stop, per line.
+ *
+ * Not a list of departure times: EMT has none to give (see schedule.js). It
+ * is today's first and last bus and the interval band, plus whether the line
+ * is running now. Built from the 7-day detail cache, so it costs nothing on a
+ * stop the page has already opened. A stop with no detail record (code 81)
+ * answers from `?lines=` — the codes area search knows for it — via each
+ * line's timetable, its hours marked borrowed; `?day=` names the day type,
+ * else it is taken from the weekday, which knows no holidays.
+ */
+const SCHEDULE_MAX_BORROWED_LINES = 8;
+const DAY_TYPES = new Set(["LA", "SA", "FE", "V"]);
+
+function weekdayDayType(now = new Date()) {
+  const day = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", weekday: "short" })
+    .format(now);
+  return day === "Sat" ? "SA" : day === "Sun" ? "FE" : "LA";
+}
+
+async function stopSchedule(requestUrl, emt, stopId, url, ctx) {
+  if (!/^\d+$/.test(stopId)) throw new EmtError("bad_request", "not a valid stop");
+  try {
+    return scheduleFromDetail(await cachedStopDetail(requestUrl, emt, stopId, ctx));
+  } catch (err) {
+    const lines = (url.searchParams.get("lines") ?? "").split(",").map((l) => l.trim())
+      .filter((l) => /^[0-9A-Za-z]+$/.test(l));
+    if (!(err instanceof EmtError) || err.kind !== "not_found" || lines.length === 0) throw err;
+    const asked = url.searchParams.get("day")?.toUpperCase();
+    const dayType = DAY_TYPES.has(asked) ? asked : weekdayDayType();
+    const unique = [...new Set(lines)].slice(0, SCHEDULE_MAX_BORROWED_LINES);
+    const timetables = await Promise.all(unique.map((line) =>
+      cachedTimetable(requestUrl, emt, line, ctx).catch(() => ({ line, days: [] }))));
+    return scheduleFromTimetables(stopId, timetables, dayType);
+  }
 }
 
 async function cachedIncidents(requestUrl, emt, line, ctx) {
@@ -675,6 +712,11 @@ export default {
       if (pathname === "/walking-distances" && method === "POST") {
         await authenticatedUser(env, request);
         return json(await walkingMatrix(env, request.url, await request.json(), ctx), env);
+      }
+
+      const schedule = pathname.match(/^\/stops\/([^/]+)\/schedule$/);
+      if (schedule && method === "GET") {
+        return json(await stopSchedule(request.url, emt, decodeURIComponent(schedule[1]), url, ctx), env);
       }
 
       const detail = pathname.match(/^\/stops\/([^/]+)\/detail$/);

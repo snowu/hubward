@@ -106,6 +106,7 @@ POST   /stops                      {stopId, label?}          → 201
 PATCH  /stops/:rowId               {label}                    empty label → EMT's name
 DELETE /stops/:rowId                                         → 204
 GET    /stops/:stopId/detail       name, address, coords, lines
+GET    /stops/:stopId/schedule?lines=&day=   per line: hours, headway band, running now
 GET    /stops/nearby?lat=&lon=&radius=   radius 50–3000, default 500
 GET    /lines/:line/route          both directions: paths + stops
 GET    /lines/:line/timetable      service window per day type
@@ -145,7 +146,7 @@ TTLs are declared at the top of `src/index.js`:
 | `nearby/` | Cache API | 24h | keyed on a ~110m grid (`grid3`); the page asks on a fixed 0.02° grid so every device shares the same keys |
 | `timetable/` | Cache API | 24h | changes with the season, not the hour |
 
-`CACHE_VERSION` is currently **v5**. Bump it when a parsed public payload shape
+`CACHE_VERSION` is currently **v6**. Bump it when a parsed public payload shape
 changes so old Cache API objects cannot serve an incompatible response.
 
 ## Development
@@ -153,7 +154,7 @@ changes so old Cache API objects cannot serve an incompatible response.
 ```bash
 cd api
 npm install
-npm test          # web smoke check, then vitest under workerd; 251 tests, no network
+npm test          # web smoke check, then vitest under workerd; 261 tests, no network
 npm run check:web # just the browser-load check, on its own
 npm run dev       # wrangler dev, needs .dev.vars
 npm run deploy    # wrangler deploy
@@ -489,6 +490,17 @@ alone silently dropped every transfer onto S10 (881) and every night-line leg
 until 2026-11-09. `lineEntry()` in `emt.js` normalises both shapes — detail objects and area
 search's bare codes — into one record, and `normaliseLine()` in `app.js`
 additionally tolerates the string-only shape older devices cached.
+
+**There are no scheduled times per stop, only a headway.** `minFreq` and
+`maxFreq` are the minutes between buses at that stop today (18–33 for the 5 at
+Plaza Castilla on a holiday) and, with `startTime`/`stopTime`, they are the
+whole of EMT's timetable: Madrid's lines run to an interval, not a clock, and
+no MobilityLabs endpoint we know lists per-trip times at a stop.
+`lineEntry()` keeps the band as `headway: {min, max}` and
+`GET /stops/:stopId/schedule` (`src/schedule.js`) serves it per line with
+whether it is running now, the next first bus, and the wait that band implies.
+Real per-trip times would only come from EMT's static GTFS (`stop_times.txt`),
+which needs a pipeline outside the Worker — see `docs/stop-schedules.md`.
 
 `startTime`/`stopTime` are the answer to "how can nothing be due?" — at 02:00 a
 Plaza Castilla bay running 07:30–23:45 is correctly empty, not broken.
