@@ -6,6 +6,7 @@ import { clearBikeSessionMemoryForTest } from "../src/bicimad-account.js";
 import arrivalsOk from "./fixtures/arrivals-ok.json";
 import stopDetailOk from "./fixtures/stop-detail-ok.json";
 import arroundxyOk from "./fixtures/arroundxy-ok.json";
+import timetableDay from "./fixtures/timetable-day.json";
 
 async function call(path, init) {
   const ctx = createExecutionContext();
@@ -172,6 +173,42 @@ describe("GET /stops/:id/detail", () => {
     );
     const res = await call("/stops/99999999/detail");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /stops/:id/schedule", () => {
+  it("answers from stop detail with each line's interval band", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify(stopDetailOk), { status: 200 })
+    );
+    const res = await call("/stops/31/schedule");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ stopId: "31", source: "stop", dayType: "FE" });
+    expect(body.lines[0]).toMatchObject({
+      label: "5", from: "07:30", to: "23:30", headway: { min: 18, max: 33 },
+    });
+  });
+
+  it("borrows line hours for a stop EMT has no detail for", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (req) => {
+      const u = String(req.url ?? req);
+      if (u.includes("/detail/")) {
+        return new Response(JSON.stringify({ code: "81", data: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify(timetableDay), { status: 200 });
+    });
+    const res = await call("/stops/30/schedule?lines=833-unique&day=LA");
+    expect(res.status).toBe(404); // "833-unique" is not a line code: nothing to borrow from
+    const ok = await call("/stops/30/schedule?lines=833&day=LA");
+    expect(ok.status).toBe(200);
+    const body = await ok.json();
+    expect(body).toMatchObject({ source: "line", dayType: "LA" });
+    expect(body.lines[0]).toMatchObject({ line: "833", from: "07:00", to: "20:30", borrowed: true });
+  });
+
+  it("rejects a stop id that is not a number", async () => {
+    expect((await call("/stops/abc/schedule")).status).toBe(400);
   });
 });
 

@@ -1,3 +1,4 @@
+import { headway } from "./schedule.js";
 import { EmtError } from "./errors.js";
 import { emtEndpoint, recordUpstreamMetric } from "./metrics.js";
 import { sharedLoad } from "./shared-load.js";
@@ -284,13 +285,17 @@ function lineEntry(l) {
       // the only way to pick the right row out of a line's timetable.
       dayType: l.dayType ?? null,
       headers: [l.headerA, l.headerB].filter(Boolean).map(String),
+      // Minutes between buses at this stop today, smallest first. This band
+      // *is* EMT's schedule: there are no per-trip times to publish, because
+      // Madrid's lines run to a headway rather than a clock (see schedule.js).
+      headway: headway(l.minFreq, l.maxFreq),
       ...(["A", "B"].includes(direction) ? { direction } : {}),
     };
   }
   // A bare code. The label is not derivable — night line 523 is signed N23 —
   // so show the code EMT gave rather than inventing a prettier one.
   const code = String(l ?? "");
-  return { line: code, label: code, from: null, to: null, dayType: null, headers: [] };
+  return { line: code, label: code, from: null, to: null, dayType: null, headers: [], headway: null };
 }
 
 function parseLines(raw) {
